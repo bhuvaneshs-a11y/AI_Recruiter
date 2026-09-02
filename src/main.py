@@ -72,23 +72,36 @@ def run_local(resume_path):
     process_resume(path, f"local:{path.stem}")
 
 
-def run_zoho():
+def _find_resume_attachment(attachments):
+    # Prefer Zoho's own categorization; fall back to file extension if uncategorized.
+    for a in attachments:
+        category = a.get("Category") or a.get("$attach_type") or {}
+        if category.get("name") == "Resume":
+            return a
+    return next(
+        (a for a in attachments if a.get("File_Name", "").lower().endswith(
+            (".pdf", ".docx", ".doc"))),
+        None,
+    )
+
+
+def run_zoho(limit=None):
     client = ZohoClient()
     page = 1
-    while True:
+    processed = 0
+    while limit is None or processed < limit:
         result = client.get_candidates(page=page, fields="id,Full_Name,Email,Phone")
         candidates = result.get("data", [])
         if not candidates:
             break
 
         for candidate in candidates:
+            if limit is not None and processed >= limit:
+                break
+
             record_id = candidate["id"]
             attachments = client.list_attachments(record_id).get("data", [])
-            resume_attachment = next(
-                (a for a in attachments if a.get("File_Name", "").lower().endswith(
-                    (".pdf", ".docx", ".doc"))),
-                None,
-            )
+            resume_attachment = _find_resume_attachment(attachments)
             if not resume_attachment:
                 print(f"[{record_id}] no resume attachment found, skipping")
                 continue
@@ -103,6 +116,7 @@ def run_zoho():
                 email=candidate.get("Email"),
                 phone=candidate.get("Phone"),
             )
+            processed += 1
 
         if not result.get("info", {}).get("more_records"):
             break
@@ -114,9 +128,11 @@ if __name__ == "__main__":
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--local", metavar="RESUME_PATH", help="Analyze a single local resume file")
     group.add_argument("--zoho", action="store_true", help="Pull resumes from Zoho Recruit and analyze all")
+    parser.add_argument("--limit", type=int, default=None,
+                         help="Max number of candidates to process in --zoho mode (default: no limit)")
     args = parser.parse_args()
 
     if args.local:
         run_local(args.local)
     else:
-        run_zoho()
+        run_zoho(limit=args.limit)

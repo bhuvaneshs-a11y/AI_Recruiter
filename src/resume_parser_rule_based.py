@@ -4,13 +4,47 @@ EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 PHONE_RE = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
 URL_RE = re.compile(r"https?://[^\s)>\],;]+")
 
+DATE_TOKEN_RE = re.compile(
+    r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s*\d{4}"
+    r"|\b\d{1,2}[-/]\d{4}\b|\b\d{4}\b|Present|Current",
+    re.IGNORECASE,
+)
+
+TITLE_KEYWORDS = [
+    "engineer", "developer", "intern", "manager", "analyst", "lead", "director",
+    "specialist", "consultant", "architect", "designer", "scientist",
+    "administrator", "coordinator", "executive", "officer", "associate",
+    "assistant", "head", "founder", "president", "programmer",
+]
+
 SECTION_HEADERS = {
     "summary": ["summary", "objective", "profile"],
     "skills": ["skills", "technical skills", "technologies"],
-    "experience": ["experience", "work experience", "employment history"],
+    "experience": [
+        "experience", "work experience", "employment history",
+        "professional experience", "work history",
+    ],
     "education": ["education", "academic background"],
     "projects": ["projects", "personal projects", "academic projects"],
 }
+
+
+def _extract_duration(line):
+    """Pull date-range tokens out of a line, returning (clean_label, duration_string)."""
+    tokens = DATE_TOKEN_RE.findall(line)
+    if not tokens:
+        return line.strip(), ""
+    duration = " - ".join(tokens)
+    label = DATE_TOKEN_RE.sub("", line)
+    label = re.sub(r"[\s\-–—•�]+$", "", label)
+    label = re.sub(r"^[\s\-–—•�]+", "", label)
+    label = re.sub(r"\s{2,}", " ", label).strip()
+    return label, duration
+
+
+def _is_title_line(text):
+    lower = text.lower()
+    return any(kw in lower for kw in TITLE_KEYWORDS)
 
 
 def _find_sections(lines):
@@ -84,10 +118,25 @@ def extract_candidate_profile(text):
 
     experience = []
     for block in _split_blocks(sections.get("experience", [])):
+        if not block:
+            continue
+
+        line0_label, line0_duration = _extract_duration(block[0])
+        line1_label, line1_duration = _extract_duration(block[1]) if len(block) > 1 else ("", "")
+
+        line0_is_title = _is_title_line(line0_label)
+        line1_is_title = _is_title_line(line1_label)
+
+        if line1_is_title and not line0_is_title:
+            title, company = line1_label, line0_label
+        else:
+            # Default/tie-break: title first, company second (common convention).
+            title, company = line0_label, line1_label
+
         experience.append({
-            "company": block[0].strip() if block else "",
-            "title": block[1].strip() if len(block) > 1 else "",
-            "duration": "",
+            "company": company,
+            "title": title,
+            "duration": line0_duration or line1_duration,
             "description": " ".join(l.strip() for l in block),
         })
 

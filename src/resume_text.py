@@ -9,13 +9,17 @@ def extract_text(file_path):
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
-        return _extract_pdf(path)
-    if suffix == ".docx":
-        return _extract_docx(path)
-    if suffix == ".txt":
-        return path.read_text(encoding="utf-8", errors="ignore")
+        text = _extract_pdf(path)
+    elif suffix == ".docx":
+        text = _extract_docx(path)
+    elif suffix == ".txt":
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    else:
+        raise ValueError(f"Unsupported resume format: {suffix} (supported: .pdf, .docx, .txt)")
 
-    raise ValueError(f"Unsupported resume format: {suffix} (supported: .pdf, .docx, .txt)")
+    # Some PDF fonts encode dashes in a way pdfplumber can't decode; normalize
+    # the resulting replacement character to a plain hyphen.
+    return text.replace("�", "-")
 
 
 def _extract_pdf(path):
