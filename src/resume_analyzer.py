@@ -65,7 +65,20 @@ PROFILE_SCHEMA = {
 }
 
 
-def extract_candidate_profile(resume_text):
+def extract_candidate_profile(resume_text, extra_links=None):
+    """extra_links: URLs embedded as PDF/DOCX hyperlink annotations (e.g. "Live: Link"
+    anchors) that don't appear as visible text in resume_text - see
+    resume_text.extract_links. Passed along so Claude can place them correctly
+    using surrounding context, since plain-text extraction alone would miss them."""
+    extra_links = extra_links or []
+    extra_links_note = (
+        f"\n\nThe following URLs were found embedded as clickable hyperlinks in the "
+        f"document but may not appear as visible text above - use the surrounding "
+        f"context to associate each with the right project if possible, otherwise "
+        f"put it in other_links: {json.dumps(extra_links)}"
+        if extra_links else ""
+    )
+
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     response = client.messages.create(
         model=MODEL,
@@ -81,7 +94,7 @@ def extract_candidate_profile(resume_text):
                 "Include every project mentioned along with any URLs associated with it "
                 "(GitHub repos, live demos, portfolio pages). Put any other links "
                 "(LinkedIn, personal site, etc.) not tied to a specific project in "
-                "other_links.\n\nResume text:\n\n" + resume_text
+                "other_links.\n\nResume text:\n\n" + resume_text + extra_links_note
             ),
         }],
     )

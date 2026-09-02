@@ -11,7 +11,7 @@ from deep_analysis import (
 )
 from resume_analyzer import extract_candidate_profile as extract_candidate_profile_claude
 from resume_parser_rule_based import extract_candidate_profile as extract_candidate_profile_rule_based
-from resume_text import extract_text
+from resume_text import extract_links, extract_text
 from zoho_client import ZohoClient
 
 
@@ -20,11 +20,12 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None)
 
     try:
         text = extract_text(resume_path)
+        extra_links = extract_links(resume_path)
 
         if backend == "claude":
-            profile = extract_candidate_profile_claude(text)
+            profile = extract_candidate_profile_claude(text, extra_links)
         else:
-            profile = extract_candidate_profile_rule_based(text)
+            profile = extract_candidate_profile_rule_based(text, extra_links)
 
         verified_profile = verify_profile_links(profile)
 

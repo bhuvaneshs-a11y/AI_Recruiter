@@ -26,10 +26,12 @@ def _github_headers():
 
 def _parse_owner_repo(url):
     path = urlparse(url).path.strip("/")
-    parts = path.split("/")
-    if len(parts) < 2:
+    if not path:
         return None, None
-    return parts[0], parts[1]
+    parts = path.split("/")
+    owner = parts[0] or None
+    repo = parts[1] if len(parts) > 1 and parts[1] else None
+    return owner, repo
 
 
 def verify_github(url, candidate_name=""):

@@ -79,7 +79,12 @@ def _split_blocks(lines):
     return blocks
 
 
-def extract_candidate_profile(text):
+def extract_candidate_profile(text, extra_links=None):
+    """extra_links: URLs embedded as PDF/DOCX hyperlink annotations that don't
+    appear as visible text (e.g. "Live: Link" anchors) - see resume_text.extract_links.
+    These can't be reliably tied to a specific project without visible text or
+    positional analysis, so they're added to other_links rather than guessed."""
+    extra_links = extra_links or []
     lines = text.splitlines()
     non_empty = [l for l in lines if l.strip()]
 
@@ -152,7 +157,9 @@ def extract_candidate_profile(text):
             "links": links,
         })
 
+    already_captured = set(all_urls) | project_urls_used
     other_links = [u for u in all_urls if u not in project_urls_used]
+    other_links += [u for u in dict.fromkeys(extra_links) if u not in already_captured]
 
     return {
         "full_name": full_name,
