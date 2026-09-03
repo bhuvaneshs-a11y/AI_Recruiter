@@ -6,3 +6,4 @@ venv/
 data/resumes/
 data/analysis/
 data/*.db
+TECH_STACK.md
