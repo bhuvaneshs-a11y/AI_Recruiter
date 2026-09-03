@@ -133,6 +133,10 @@ def verify_linkedin(url):
 
 
 def verify_link(url, candidate_name=""):
+    if not url.startswith(("http://", "https://")):
+        return {"url": url, "type": "unsupported", "reachable": False,
+                "note": "Not an http(s) URL (e.g. mailto:, tel:) - not verifiable."}
+
     link_type = classify_link(url)
     if link_type == "github":
         return verify_github(url, candidate_name)

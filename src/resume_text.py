@@ -45,10 +45,14 @@ def extract_links(file_path):
     suffix = path.suffix.lower()
 
     if suffix == ".pdf":
-        return _extract_pdf_links(path)
-    if suffix == ".docx":
-        return _extract_docx_links(path)
-    return []
+        links = _extract_pdf_links(path)
+    elif suffix == ".docx":
+        links = _extract_docx_links(path)
+    else:
+        links = []
+
+    # Hyperlink annotations can be mailto:, tel:, etc. - not verifiable project links.
+    return [link for link in links if link.startswith(("http://", "https://"))]
 
 
 def _extract_pdf_links(path):
