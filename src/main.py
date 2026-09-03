@@ -6,33 +6,48 @@ import config
 from db.writer import save_analysis, save_failed_analysis
 from deep_analysis import (
     generate_deep_analysis,
+    generate_deep_analysis_gemini,
     generate_deep_analysis_rule_based,
     verify_profile_links,
 )
 from resume_analyzer import extract_candidate_profile as extract_candidate_profile_claude
+from resume_analyzer_gemini import extract_candidate_profile as extract_candidate_profile_gemini
 from resume_parser_rule_based import extract_candidate_profile as extract_candidate_profile_rule_based
 from resume_text import extract_links, extract_text
 from zoho_client import ZohoClient
 
 
+def _select_backend():
+    if config.ANTHROPIC_API_KEY:
+        return "claude"
+    if config.GEMINI_API_KEY:
+        return "gemini"
+    return "rule_based"
+
+
+EXTRACT_BY_BACKEND = {
+    "claude": extract_candidate_profile_claude,
+    "gemini": extract_candidate_profile_gemini,
+    "rule_based": extract_candidate_profile_rule_based,
+}
+
+ANALYZE_BY_BACKEND = {
+    "claude": generate_deep_analysis,
+    "gemini": generate_deep_analysis_gemini,
+    "rule_based": generate_deep_analysis_rule_based,
+}
+
+
 def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None):
-    backend = "claude" if config.ANTHROPIC_API_KEY else "rule_based"
+    backend = _select_backend()
 
     try:
         text = extract_text(resume_path)
         extra_links = extract_links(resume_path)
 
-        if backend == "claude":
-            profile = extract_candidate_profile_claude(text, extra_links)
-        else:
-            profile = extract_candidate_profile_rule_based(text, extra_links)
-
+        profile = EXTRACT_BY_BACKEND[backend](text, extra_links)
         verified_profile = verify_profile_links(profile)
-
-        if backend == "claude":
-            report = generate_deep_analysis(verified_profile)
-        else:
-            report = generate_deep_analysis_rule_based(verified_profile)
+        report = ANALYZE_BY_BACKEND[backend](verified_profile)
     except Exception as e:
         save_failed_analysis(
             zoho_id=zoho_id,

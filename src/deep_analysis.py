@@ -1,6 +1,8 @@
 import json
 
 import anthropic
+from google import genai
+from google.genai import types
 
 import config
 from link_verifier import verify_link
@@ -88,6 +90,50 @@ def generate_deep_analysis(verified_profile):
     )
     text = next(b.text for b in response.content if b.type == "text")
     return json.loads(text)
+
+
+def _strip_additional_properties(schema):
+    """Gemini's structured-output schema support is a subset of JSON Schema and
+    may not recognize additionalProperties - strip it recursively to be safe."""
+    if isinstance(schema, dict):
+        return {
+            k: _strip_additional_properties(v)
+            for k, v in schema.items()
+            if k != "additionalProperties"
+        }
+    if isinstance(schema, list):
+        return [_strip_additional_properties(v) for v in schema]
+    return schema
+
+
+GEMINI_REPORT_SCHEMA = _strip_additional_properties(REPORT_SCHEMA)
+
+
+def generate_deep_analysis_gemini(verified_profile):
+    """Temporary free-tier stand-in for generate_deep_analysis() while
+    ANTHROPIC_API_KEY isn't available. TEMPORARY: not yet verified against a live
+    Gemini API key; the exact request shape may need adjustment once actually tested."""
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
+    response = client.models.generate_content(
+        model=config.GEMINI_MODEL,
+        contents=(
+            "You are reviewing a candidate profile extracted from a resume, where "
+            "every project link has already been independently verified against "
+            "GitHub/portfolio/LinkedIn (see link_verification data per project). "
+            "Cross-check each project's claimed description against the verification "
+            "evidence (e.g. does the GitHub repo actually exist, is the candidate a "
+            "real contributor with meaningful commit/PR activity, or is it an empty "
+            "fork with no real work). Flag any claim not supported by evidence as "
+            "unverified or suspicious. Give an overall credibility score 0-100 and a "
+            "hiring recommendation.\n\nCandidate profile with verification data:\n\n"
+            + json.dumps(verified_profile, indent=2)
+        ),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_json_schema=GEMINI_REPORT_SCHEMA,
+        ),
+    )
+    return json.loads(response.text)
 
 
 def _project_verdict(project):
