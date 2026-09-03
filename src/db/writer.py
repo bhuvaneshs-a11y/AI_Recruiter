@@ -40,8 +40,8 @@ def save_analysis(zoho_id, full_name, email, phone, resume_file_path, backend, v
             status="completed",
             summary=report.get("summary"),
             credibility_score=report.get("overall_credibility_score"),
-            red_flags=json.dumps(report.get("red_flags", [])),
-            raw_llm_response=json.dumps({"profile": verified_profile, "report": report}),
+            red_flags=json.dumps(report.get("red_flags", []), ensure_ascii=False),
+            raw_llm_response=json.dumps({"profile": verified_profile, "report": report}, ensure_ascii=False),
         )
         db.add(analysis)
         db.flush()
@@ -51,7 +51,7 @@ def save_analysis(zoho_id, full_name, email, phone, resume_file_path, backend, v
                 resume_analysis_id=analysis.id,
                 project_name=pv.get("project_name"),
                 claim=pv.get("claim"),
-                links=json.dumps(links_by_project.get(pv.get("project_name"), [])),
+                links=json.dumps(links_by_project.get(pv.get("project_name"), []), ensure_ascii=False),
                 verdict=pv.get("verdict"),
                 evidence=pv.get("evidence"),
             ))

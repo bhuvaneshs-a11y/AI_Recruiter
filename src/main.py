@@ -65,7 +65,7 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None)
     out_path.write_text(json.dumps({
         "profile": verified_profile,
         "report": report,
-    }, indent=2), encoding="utf-8")
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
 
     analysis_id = save_analysis(
         zoho_id=zoho_id,
