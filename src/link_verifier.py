@@ -34,6 +34,31 @@ def _parse_owner_repo(url):
     return owner, repo
 
 
+def _check_owner_profile(owner, candidate_name):
+    """Fetch the GitHub user's own profile stats - these come back on every
+    /users/{owner} call regardless of whether the link is to a specific repo
+    or just a bare profile, so always surface them rather than discarding."""
+    out = {
+        "owner_exists": False, "owner_name_matches_candidate": None,
+        "owner_public_repos": None, "owner_followers": None,
+        "owner_account_created_at": None,
+    }
+    resp = requests.get(f"{GITHUB_API}/users/{owner}", headers=_github_headers(), timeout=15)
+    if resp.status_code != 200:
+        return out
+    data = resp.json()
+    out["owner_exists"] = True
+    out["owner_public_repos"] = data.get("public_repos")
+    out["owner_followers"] = data.get("followers")
+    out["owner_account_created_at"] = data.get("created_at")
+    display_name = (data.get("name") or "").lower()
+    out["owner_name_matches_candidate"] = bool(
+        candidate_name and display_name and
+        any(part in display_name for part in candidate_name.lower().split() if len(part) > 2)
+    )
+    return out
+
+
 def verify_github(url, candidate_name=""):
     owner, repo = _parse_owner_repo(url)
     if not owner:
@@ -43,20 +68,16 @@ def verify_github(url, candidate_name=""):
         "url": url, "type": "github", "owner": owner, "repo": repo,
         "exists": False, "is_fork": None, "stars": None,
         "owner_is_contributor": None, "owner_commit_count_approx": None,
-        "owner_pr_count": None, "owner_name_matches_candidate": None,
+        "owner_pr_count": None,
     }
 
     if not repo:
-        # Profile link only (github.com/{owner}) - check user exists, compare display name
-        resp = requests.get(f"{GITHUB_API}/users/{owner}", headers=_github_headers(), timeout=15)
-        if resp.status_code == 200:
-            data = resp.json()
-            result["exists"] = True
-            display_name = (data.get("name") or "").lower()
-            result["owner_name_matches_candidate"] = bool(
-                candidate_name and display_name and
-                any(part in display_name for part in candidate_name.lower().split() if len(part) > 2)
-            )
+        # Profile link only (github.com/{owner}) - check user exists, compare
+        # display name, and surface their overall GitHub activity (repo count,
+        # followers, account age) since there's no specific repo to check.
+        owner_info = _check_owner_profile(owner, candidate_name)
+        result["exists"] = owner_info.pop("owner_exists")
+        result.update(owner_info)
         return result
 
     repo_resp = requests.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=_github_headers(), timeout=15)
@@ -93,13 +114,9 @@ def verify_github(url, candidate_name=""):
     if search_resp.status_code == 200:
         result["owner_pr_count"] = search_resp.json().get("total_count")
 
-    user_resp = requests.get(f"{GITHUB_API}/users/{owner}", headers=_github_headers(), timeout=15)
-    if user_resp.status_code == 200:
-        display_name = (user_resp.json().get("name") or "").lower()
-        result["owner_name_matches_candidate"] = bool(
-            candidate_name and display_name and
-            any(part in display_name for part in candidate_name.lower().split() if len(part) > 2)
-        )
+    owner_info = _check_owner_profile(owner, candidate_name)
+    owner_info.pop("owner_exists")
+    result.update(owner_info)
 
     return result
 
