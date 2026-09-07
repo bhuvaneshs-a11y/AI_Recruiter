@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchJobOpenings } from "../api";
 
-export default function JobOpenings() {
+export default function JobOpenings({ onAnalyze }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -38,11 +38,16 @@ export default function JobOpenings() {
           {expandedId === job.id && job.description && (
             <p className="job-description">{job.description}</p>
           )}
-          {job.description && (
-            <button className="link-button" onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}>
-              {expandedId === job.id ? "Hide description" : "Show full description"}
+          <div className="job-actions">
+            {job.description && (
+              <button className="link-button" onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}>
+                {expandedId === job.id ? "Hide description" : "Show full description"}
+              </button>
+            )}
+            <button className="analyze-button" onClick={() => onAnalyze(job)}>
+              Analyze Applicants
             </button>
-          )}
+          </div>
         </div>
       ))}
     </div>

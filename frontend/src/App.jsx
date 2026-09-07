@@ -4,13 +4,18 @@ import JobOpenings from "./components/JobOpenings";
 import RunAnalysis from "./components/RunAnalysis";
 
 const TABS = [
-  { id: "job-openings", label: "Active Job Openings", component: JobOpenings },
-  { id: "run-analysis", label: "Run Analysis", component: RunAnalysis },
+  { id: "job-openings", label: "Active Job Openings" },
+  { id: "run-analysis", label: "Run Analysis" },
 ];
 
 function App() {
   const [activeTab, setActiveTab] = useState(TABS[0].id);
-  const ActiveComponent = TABS.find((t) => t.id === activeTab).component;
+  const [selectedJob, setSelectedJob] = useState(null);
+
+  function analyzeJob(job) {
+    setSelectedJob(job);
+    setActiveTab("run-analysis");
+  }
 
   return (
     <div className="app">
@@ -29,7 +34,10 @@ function App() {
         ))}
       </nav>
       <main>
-        <ActiveComponent />
+        {activeTab === "job-openings" && <JobOpenings onAnalyze={analyzeJob} />}
+        {activeTab === "run-analysis" && (
+          <RunAnalysis initialJob={selectedJob} onJobConsumed={() => setSelectedJob(null)} />
+        )}
       </main>
     </div>
   );

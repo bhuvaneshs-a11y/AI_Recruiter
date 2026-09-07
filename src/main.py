@@ -115,10 +115,13 @@ def _find_resume_attachment(attachments):
     )
 
 
-def run_zoho(limit=None):
+def run_zoho(limit=None, client=None):
     """Returns a list of {"zoho_id", "full_name", "report"} - report is None on failure.
-    CLI usage ignores the return value; the API layer uses it to show results."""
-    client = ZohoClient()
+    CLI usage ignores the return value; the API layer uses it to show results.
+    Pass an existing client (e.g. zoho_client.get_shared_client()) to reuse a
+    cached access token instead of refreshing one per call - Zoho separately
+    rate-limits the token-refresh endpoint itself."""
+    client = client or ZohoClient()
     page = 1
     processed = 0
     results = []
@@ -164,6 +167,65 @@ def run_zoho(limit=None):
             break
         page += 1
 
+    return results
+
+
+def _rank_key(result):
+    """Best-first: prefer job-fit score when available (job-scoped analysis),
+    fall back to credibility. Failed analyses always sort last."""
+    report = result.get("report")
+    if not report:
+        return -1
+    fit = report.get("overall_fit_score")
+    return fit if fit is not None else report.get("overall_credibility_score", 0)
+
+
+def run_zoho_for_job(job_opening_id, limit=None, client=None):
+    """Analyze candidates who applied to a specific Job Opening, returned best-first.
+
+    A job opening can have thousands of applicants (seen live: 6,424 for one
+    role) - `limit` caps how many are actually processed by the pipeline, not
+    how many total applicants exist. The most recent applications are
+    processed first (Zoho's default Applications ordering).
+    """
+    client = client or ZohoClient()
+
+    job_openings = client.get_all_job_openings()
+    job_opening = next((j for j in job_openings if j.get("id") == job_opening_id), None)
+    if not job_opening:
+        raise ValueError(f"Job opening {job_opening_id} not found")
+
+    applications = client.get_applications_for_job(job_opening_id, job_opening.get("Posting_Title"))
+    if limit is not None:
+        applications = applications[:limit]
+
+    results = []
+    for app in applications:
+        record_id = app.get("$Candidate_Id")
+        if not record_id:
+            continue
+
+        full_name = app.get("Full_Name")
+        email = app.get("Email")
+        phone = app.get("Mobile") or app.get("Phone")
+
+        attachments = client.list_attachments(record_id).get("data", [])
+        resume_attachment = _find_resume_attachment(attachments)
+        if not resume_attachment:
+            results.append({"zoho_id": record_id, "full_name": full_name, "report": None})
+            continue
+
+        file_name = resume_attachment["File_Name"]
+        save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
+        client.download_attachment(record_id, resume_attachment["id"], save_path)
+        report = process_resume(
+            save_path, record_id,
+            full_name=full_name, email=email, phone=phone,
+            job_opening=job_opening,
+        )
+        results.append({"zoho_id": record_id, "full_name": full_name, "report": report})
+
+    results.sort(key=_rank_key, reverse=True)
     return results
 
 

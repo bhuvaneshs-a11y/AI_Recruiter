@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from zoho_client import ZohoClient
+from zoho_client import get_shared_client
 
 router = APIRouter()
 
@@ -9,7 +9,7 @@ ACTIVE_STATUS = "In-progress"
 
 @router.get("/job-openings")
 def list_active_job_openings():
-    client = ZohoClient()
+    client = get_shared_client()
     jobs = client.get_all_job_openings()
     active = [j for j in jobs if j.get("Job_Opening_Status") == ACTIVE_STATUS]
     return [

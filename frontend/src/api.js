@@ -6,11 +6,11 @@ export async function fetchJobOpenings() {
   return res.json();
 }
 
-export async function triggerAnalysis(limit) {
+export async function triggerAnalysis(limit, jobOpeningId) {
   const res = await fetch(`${API_BASE}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ limit }),
+    body: JSON.stringify({ limit, job_opening_id: jobOpeningId || null }),
   });
   if (!res.ok) throw new Error(`Analysis request failed (${res.status})`);
   return res.json();

@@ -140,6 +140,26 @@ writes:
   `job_openings` + `applications`
 - The downloaded resume file itself to `data/resumes/` (Zoho mode only)
 
+## Web UI
+
+A FastAPI backend (`src/api/`) + React frontend (`frontend/`) sit on top of the same pipeline — no separate
+logic, just a thin trigger/display layer. Two tabs:
+
+- **Active Job Openings** — every active Job Opening pulled live from Zoho, with an **Analyze Applicants**
+  button per job.
+- **Run Analysis** — pick a job opening (or none, for job-agnostic analysis of the next N candidates) and a
+  candidate cap, then run the pipeline from the browser. Clicking **Analyze Applicants** on a job jumps here
+  with that job pre-selected. When a job is selected, only candidates who *actually applied to that job* are
+  fetched from Zoho and analyzed (a single job opening can have thousands of applicants, so the cap matters),
+  and results are ranked best-first by job-fit score, with the top result flagged **Best Match**.
+
+Run both servers separately:
+
+```bash
+cd src && uvicorn api.app:app --port 8000       # backend, localhost:8000
+cd frontend && npm run dev                       # frontend, localhost:5173
+```
+
 ## Three backends, auto-selected
 
 The extraction and report-generation steps run through one of three interchangeable backends, picked
@@ -173,6 +193,10 @@ src/
     models.py                   # SQLAlchemy models
     session.py                   # engine/session setup
     writer.py                    # save_analysis / save_failed_analysis
+  api/
+    app.py                       # FastAPI app + CORS setup
+    routes/                      # job_openings.py, analyze.py
+frontend/                       # React (Vite) web UI — Active Job Openings / Run Analysis tabs
 data/
   resumes/                      # downloaded resume files (gitignored)
   analysis/                     # per-candidate JSON results (gitignored)

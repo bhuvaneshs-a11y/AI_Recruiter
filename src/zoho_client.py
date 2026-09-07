@@ -85,6 +85,42 @@ class ZohoClient:
         resp.raise_for_status()
         return resp.json()
 
+    def get_applications_for_job(self, job_opening_id, job_title):
+        """Applications (i.e. candidates) for a specific Job Opening.
+
+        NOTE: `/JobOpenings/{id}/associate` (the docs-suggested reverse of
+        get_associated_job_openings) returns 400 "the relation name given seems
+        to be invalid" in practice, despite docs claiming symmetry with the
+        Candidates-side endpoint - confirmed live, not a guess.
+
+        Instead, this searches the Applications module directly. Zoho's search
+        API silently ignores criteria on `$Job_Opening_Id` (a computed reference
+        field - returns 200 with unfiltered results, not an error), but filtering
+        by the job's title (`Job_Opening_Name`) does work server-side. Since two
+        different job openings could in theory share the same title, this then
+        double-checks the exact job_opening_id client-side on the (much smaller)
+        returned set for correctness.
+        """
+        all_apps = []
+        page = 1
+        while True:
+            resp = requests.get(
+                f"{config.ZOHO_API_DOMAIN}/recruit/v2/Applications/search",
+                headers=self._headers(),
+                params={
+                    "criteria": f"(Job_Opening_Name:equals:{job_title})",
+                    "page": page, "per_page": 200,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            all_apps.extend(data.get("data", []))
+            if not data.get("info", {}).get("more_records"):
+                break
+            page += 1
+        return [a for a in all_apps if a.get("$Job_Opening_Id") == job_opening_id]
+
     def get_job_opening(self, job_opening_id, fields=None):
         resp = requests.get(
             f"{config.ZOHO_API_DOMAIN}/recruit/v2/JobOpenings/{job_opening_id}",
@@ -123,3 +159,18 @@ class ZohoClient:
                 break
             page += 1
         return all_records
+
+
+_shared_client = None
+
+
+def get_shared_client():
+    """One ZohoClient reused for the process lifetime - critical in the FastAPI
+    server, where a fresh ZohoClient() per request would refresh the access
+    token on every single request instead of caching it until it expires.
+    Zoho actively rate-limits the token-refresh endpoint itself, separately
+    from normal API calls."""
+    global _shared_client
+    if _shared_client is None:
+        _shared_client = ZohoClient()
+    return _shared_client
