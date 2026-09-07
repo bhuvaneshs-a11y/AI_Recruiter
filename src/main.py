@@ -38,7 +38,7 @@ ANALYZE_BY_BACKEND = {
 }
 
 
-def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None):
+def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None, job_opening=None):
     backend = _select_backend()
 
     try:
@@ -61,11 +61,17 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None)
         print(f"[{zoho_id}] FAILED: {e}")
         return None
 
+    output = {"profile": verified_profile, "report": report}
+    if job_opening:
+        output["job_opening"] = {
+            "title": job_opening.get("Posting_Title"),
+            "description": job_opening.get("Job_Description"),
+            "required_skills": job_opening.get("Required_Skills"),
+            "experience_level": job_opening.get("Work_Experience"),
+        }
+
     out_path = config.ANALYSIS_DIR / f"{str(zoho_id).replace(':', '_')}.json"
-    out_path.write_text(json.dumps({
-        "profile": verified_profile,
-        "report": report,
-    }, indent=2, ensure_ascii=False), encoding="utf-8")
+    out_path.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
 
     analysis_id = save_analysis(
         zoho_id=zoho_id,
@@ -76,6 +82,7 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None)
         backend=backend,
         verified_profile=verified_profile,
         report=report,
+        job_opening=job_opening,
     )
 
     print(f"[{zoho_id}] credibility={report['overall_credibility_score']} "
@@ -122,6 +129,9 @@ def run_zoho(limit=None):
                 print(f"[{record_id}] no resume attachment found, skipping")
                 continue
 
+            job_openings = client.get_associated_job_openings(record_id).get("data", [])
+            job_opening = job_openings[0] if job_openings else None
+
             file_name = resume_attachment["File_Name"]
             save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
             client.download_attachment(record_id, resume_attachment["id"], save_path)
@@ -131,6 +141,7 @@ def run_zoho(limit=None):
                 full_name=candidate.get("Full_Name"),
                 email=candidate.get("Email"),
                 phone=candidate.get("Phone"),
+                job_opening=job_opening,
             )
             processed += 1
 
