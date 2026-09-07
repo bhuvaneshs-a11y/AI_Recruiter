@@ -64,8 +64,8 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None,
     output = {"profile": verified_profile, "report": report}
     if job_opening:
         output["job_opening"] = {
-            "title": job_opening.get("Posting_Title"),
-            "description": job_opening.get("Job_Description"),
+            "job_applied_for": job_opening.get("Posting_Title"),
+            "job_description": job_opening.get("Job_Description"),
             "required_skills": job_opening.get("Required_Skills"),
             "experience_level": job_opening.get("Work_Experience"),
         }
