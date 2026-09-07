@@ -98,6 +98,16 @@ def save_analysis(zoho_id, full_name, email, phone, resume_file_path, backend,
             credibility_score=report.get("overall_credibility_score"),
             red_flags=json.dumps(report.get("red_flags", []), ensure_ascii=False),
             raw_llm_response=json.dumps({"profile": verified_profile, "report": report}, ensure_ascii=False),
+            overall_fit_score=report.get("overall_fit_score"),
+            confidence=report.get("confidence"),
+            skills_matched=json.dumps(report.get("skills_matched", []), ensure_ascii=False)
+                if "skills_matched" in report else None,
+            skills_missing=json.dumps(report.get("skills_missing", []), ensure_ascii=False)
+                if "skills_missing" in report else None,
+            experience_assessment=report.get("experience_assessment"),
+            career_trajectory_notes=report.get("career_trajectory_notes"),
+            suggested_interview_questions=json.dumps(report.get("suggested_interview_questions", []), ensure_ascii=False)
+                if "suggested_interview_questions" in report else None,
         )
         db.add(analysis)
         db.flush()

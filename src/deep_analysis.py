@@ -1,3 +1,4 @@
+import copy
 import json
 
 import anthropic
@@ -44,6 +45,42 @@ REPORT_SCHEMA = {
     "additionalProperties": False,
 }
 
+# Job-fit fields, only asked for when a job_opening is actually available to
+# compare against - added on top of REPORT_SCHEMA rather than always-required,
+# since there's nothing to score a fit against otherwise (e.g. --local mode).
+JOB_FIT_PROPERTIES = {
+    "overall_fit_score": {"type": "integer"},
+    "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+    "skills_matched": {"type": "array", "items": {"type": "string"}},
+    "skills_missing": {"type": "array", "items": {"type": "string"}},
+    "experience_assessment": {"type": "string"},
+    "career_trajectory_notes": {"type": "string"},
+    "suggested_interview_questions": {"type": "array", "items": {"type": "string"}},
+}
+
+JOB_FIT_REPORT_SCHEMA = copy.deepcopy(REPORT_SCHEMA)
+JOB_FIT_REPORT_SCHEMA["properties"].update(JOB_FIT_PROPERTIES)
+JOB_FIT_REPORT_SCHEMA["required"] += list(JOB_FIT_PROPERTIES.keys())
+
+
+def _job_fit_prompt_section(job_opening):
+    if not job_opening:
+        return ""
+    return (
+        "\n\nAdditionally, score how well this candidate fits the specific job below. "
+        "Compare their skills and experience against the job's required skills and "
+        "experience level. List which required skills they demonstrably have "
+        "(skills_matched) and which they show no evidence of (skills_missing). Give "
+        "an overall_fit_score (0-100), a confidence level (high/medium/low), an "
+        "experience_assessment, career_trajectory_notes (does their career path make "
+        "sense for this role), and 3-5 suggested_interview_questions to probe gaps "
+        "or verify claims relevant to this specific role.\n\n"
+        f"Job applied for: {job_opening.get('job_applied_for')}\n"
+        f"Required skills: {job_opening.get('required_skills')}\n"
+        f"Experience level required: {job_opening.get('experience_level')}\n"
+        f"Job description: {job_opening.get('job_description')}"
+    )
+
 
 def verify_profile_links(profile):
     candidate_name = profile.get("full_name", "")
@@ -63,14 +100,15 @@ def verify_profile_links(profile):
     }
 
 
-def generate_deep_analysis(verified_profile):
+def generate_deep_analysis(verified_profile, job_opening=None):
+    schema = JOB_FIT_REPORT_SCHEMA if job_opening else REPORT_SCHEMA
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
     response = client.messages.create(
         model=MODEL,
         max_tokens=4096,
         output_config={
             "effort": "high",
-            "format": {"type": "json_schema", "schema": REPORT_SCHEMA},
+            "format": {"type": "json_schema", "schema": schema},
         },
         messages=[{
             "role": "user",
@@ -83,7 +121,9 @@ def generate_deep_analysis(verified_profile):
                 "real contributor with meaningful commit/PR activity, or is it an empty "
                 "fork with no real work). Flag any claim not supported by evidence as "
                 "unverified or suspicious. Give an overall credibility score 0-100 and a "
-                "hiring recommendation.\n\nCandidate profile with verification data:\n\n"
+                "hiring recommendation."
+                + _job_fit_prompt_section(job_opening)
+                + "\n\nCandidate profile with verification data:\n\n"
                 + json.dumps(verified_profile, indent=2)
             ),
         }],
@@ -107,12 +147,13 @@ def _strip_additional_properties(schema):
 
 
 GEMINI_REPORT_SCHEMA = _strip_additional_properties(REPORT_SCHEMA)
+GEMINI_JOB_FIT_REPORT_SCHEMA = _strip_additional_properties(JOB_FIT_REPORT_SCHEMA)
 
 
-def generate_deep_analysis_gemini(verified_profile):
+def generate_deep_analysis_gemini(verified_profile, job_opening=None):
     """Temporary free-tier stand-in for generate_deep_analysis() while
-    ANTHROPIC_API_KEY isn't available. TEMPORARY: not yet verified against a live
-    Gemini API key; the exact request shape may need adjustment once actually tested."""
+    ANTHROPIC_API_KEY isn't available."""
+    schema = GEMINI_JOB_FIT_REPORT_SCHEMA if job_opening else GEMINI_REPORT_SCHEMA
     client = genai.Client(api_key=config.GEMINI_API_KEY)
     response = client.models.generate_content(
         model=config.GEMINI_MODEL,
@@ -125,12 +166,14 @@ def generate_deep_analysis_gemini(verified_profile):
             "real contributor with meaningful commit/PR activity, or is it an empty "
             "fork with no real work). Flag any claim not supported by evidence as "
             "unverified or suspicious. Give an overall credibility score 0-100 and a "
-            "hiring recommendation.\n\nCandidate profile with verification data:\n\n"
+            "hiring recommendation."
+            + _job_fit_prompt_section(job_opening)
+            + "\n\nCandidate profile with verification data:\n\n"
             + json.dumps(verified_profile, indent=2)
         ),
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
-            response_json_schema=GEMINI_REPORT_SCHEMA,
+            response_json_schema=schema,
         ),
     )
     return json.loads(response.text)
@@ -173,7 +216,22 @@ def _project_verdict(project):
     return "unverified", " ".join(notes)
 
 
-def generate_deep_analysis_rule_based(verified_profile):
+def _match_skills(candidate_skills, required_skills_str):
+    """Loose case-insensitive substring match - no semantic understanding, so
+    treat this as a rough signal, not a precise assessment."""
+    required = [s.strip() for s in (required_skills_str or "").split(",") if s.strip()]
+    candidate_norm = [s.lower() for s in candidate_skills]
+    matched, missing = [], []
+    for req in required:
+        req_norm = req.lower()
+        if any(req_norm in c or c in req_norm for c in candidate_norm):
+            matched.append(req)
+        else:
+            missing.append(req)
+    return matched, missing
+
+
+def generate_deep_analysis_rule_based(verified_profile, job_opening=None):
     """Deterministic, non-LLM report generator — used when no ANTHROPIC_API_KEY is configured."""
     project_verification = []
     score = 50
@@ -212,7 +270,7 @@ def generate_deep_analysis_rule_based(verified_profile):
     else:
         recommendation = "Multiple claims are unverified or suspicious. Recommend closer scrutiny before proceeding."
 
-    return {
+    result = {
         "candidate_name": verified_profile.get("full_name", ""),
         "summary": "Auto-generated summary (rule-based mode, no ANTHROPIC_API_KEY configured). "
                     "Set ANTHROPIC_API_KEY in .env for a full narrative analysis.",
@@ -226,3 +284,26 @@ def generate_deep_analysis_rule_based(verified_profile):
         "overall_credibility_score": score,
         "recommendation": recommendation,
     }
+
+    if job_opening:
+        matched, missing = _match_skills(
+            verified_profile.get("skills", []), job_opening.get("required_skills")
+        )
+        total_required = len(matched) + len(missing)
+        fit_score = round((len(matched) / total_required) * 100) if total_required else 0
+        result.update({
+            "overall_fit_score": fit_score,
+            "confidence": "low",  # keyword substring matching only, not a real judgment
+            "skills_matched": matched,
+            "skills_missing": missing,
+            "experience_assessment": (
+                f"Rule-based keyword match only (no semantic understanding). "
+                f"Required experience level: {job_opening.get('experience_level') or 'unspecified'}."
+            ),
+            "career_trajectory_notes": "Not assessed in rule-based mode.",
+            "suggested_interview_questions": [
+                f"Can you describe your experience with {s}?" for s in missing[:5]
+            ],
+        })
+
+    return result

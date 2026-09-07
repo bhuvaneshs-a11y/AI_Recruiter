@@ -39,7 +39,19 @@ ANALYZE_BY_BACKEND = {
 
 
 def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None, job_opening=None):
+    """job_opening: raw dict from ZohoClient.get_associated_job_openings() data[0] - kept
+    in Zoho's own field names here since save_analysis()/db.writer need those, but
+    converted to a clean shape below for the LLM prompt and JSON output."""
     backend = _select_backend()
+
+    job_opening_clean = None
+    if job_opening:
+        job_opening_clean = {
+            "job_applied_for": job_opening.get("Posting_Title"),
+            "job_description": job_opening.get("Job_Description"),
+            "required_skills": job_opening.get("Required_Skills"),
+            "experience_level": job_opening.get("Work_Experience"),
+        }
 
     try:
         text = extract_text(resume_path)
@@ -47,7 +59,7 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None,
 
         profile = EXTRACT_BY_BACKEND[backend](text, extra_links)
         verified_profile = verify_profile_links(profile)
-        report = ANALYZE_BY_BACKEND[backend](verified_profile)
+        report = ANALYZE_BY_BACKEND[backend](verified_profile, job_opening_clean)
     except Exception as e:
         save_failed_analysis(
             zoho_id=zoho_id,
@@ -62,13 +74,8 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None,
         return None
 
     output = {"profile": verified_profile, "report": report}
-    if job_opening:
-        output["job_opening"] = {
-            "job_applied_for": job_opening.get("Posting_Title"),
-            "job_description": job_opening.get("Job_Description"),
-            "required_skills": job_opening.get("Required_Skills"),
-            "experience_level": job_opening.get("Work_Experience"),
-        }
+    if job_opening_clean:
+        output["job_opening"] = job_opening_clean
 
     out_path = config.ANALYSIS_DIR / f"{str(zoho_id).replace(':', '_')}.json"
     out_path.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
