@@ -116,9 +116,12 @@ def _find_resume_attachment(attachments):
 
 
 def run_zoho(limit=None):
+    """Returns a list of {"zoho_id", "full_name", "report"} - report is None on failure.
+    CLI usage ignores the return value; the API layer uses it to show results."""
     client = ZohoClient()
     page = 1
     processed = 0
+    results = []
     while limit is None or processed < limit:
         result = client.get_candidates(page=page, fields="id,Full_Name,Email,Phone")
         candidates = result.get("data", [])
@@ -142,7 +145,7 @@ def run_zoho(limit=None):
             file_name = resume_attachment["File_Name"]
             save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
             client.download_attachment(record_id, resume_attachment["id"], save_path)
-            process_resume(
+            report = process_resume(
                 save_path,
                 record_id,
                 full_name=candidate.get("Full_Name"),
@@ -150,11 +153,18 @@ def run_zoho(limit=None):
                 phone=candidate.get("Phone"),
                 job_opening=job_opening,
             )
+            results.append({
+                "zoho_id": record_id,
+                "full_name": candidate.get("Full_Name"),
+                "report": report,
+            })
             processed += 1
 
         if not result.get("info", {}).get("more_records"):
             break
         page += 1
+
+    return results
 
 
 if __name__ == "__main__":

@@ -94,3 +94,32 @@ class ZohoClient:
         )
         resp.raise_for_status()
         return resp.json()
+
+    def get_job_openings(self, page=1, per_page=200,
+                          fields="id,Job_Opening_Name,Posting_Title,Job_Opening_Status,"
+                                 "Number_of_Positions,Job_Description,Required_Skills,"
+                                 "Work_Experience,Industry,Job_Type,Remote_Job,Target_Date"):
+        resp = requests.get(
+            f"{config.ZOHO_API_DOMAIN}/recruit/v2/JobOpenings",
+            headers=self._headers(),
+            params={"page": page, "per_page": per_page, "fields": fields},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_all_job_openings(self, fields=None):
+        """Auto-paginated: returns every Job Opening record as a single list."""
+        all_records = []
+        page = 1
+        while True:
+            kwargs = {"page": page}
+            if fields:
+                kwargs["fields"] = fields
+            result = self.get_job_openings(**kwargs)
+            records = result.get("data", [])
+            all_records.extend(records)
+            if not result.get("info", {}).get("more_records"):
+                break
+            page += 1
+        return all_records

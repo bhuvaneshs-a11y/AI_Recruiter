@@ -1,0 +1,140 @@
+.app {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+  text-align: left;
+}
+
+header h1 {
+  font-size: 1.5rem;
+  margin-bottom: 16px;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid #444;
+  margin-bottom: 24px;
+}
+
+.tab {
+  background: none;
+  border: none;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 1rem;
+  color: inherit;
+  opacity: 0.7;
+  border-bottom: 2px solid transparent;
+}
+
+.tab.active {
+  opacity: 1;
+  border-bottom: 2px solid #61dafb;
+}
+
+.error {
+  color: #e5484d;
+}
+
+.hint {
+  opacity: 0.7;
+  font-size: 0.9rem;
+}
+
+/* Job Openings */
+.job-openings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.job-card {
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: left;
+}
+
+.job-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+
+.job-card-header h3 {
+  margin: 0;
+}
+
+.badge {
+  background: #2f855a;
+  color: white;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.8rem;
+}
+
+.job-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 0.9rem;
+  opacity: 0.8;
+  margin-top: 8px;
+}
+
+.job-skills {
+  margin-top: 8px;
+  font-size: 0.9rem;
+}
+
+.job-description {
+  margin-top: 8px;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: #61dafb;
+  cursor: pointer;
+  padding: 0;
+  margin-top: 8px;
+  font-size: 0.85rem;
+}
+
+/* Run Analysis */
+.run-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.run-controls input {
+  width: 60px;
+  margin-left: 8px;
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.result-card {
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 16px;
+  text-align: left;
+}
+
+.result-card h4 {
+  margin: 0 0 8px;
+}
+
+.recommendation {
+  font-style: italic;
+  opacity: 0.85;
+}
