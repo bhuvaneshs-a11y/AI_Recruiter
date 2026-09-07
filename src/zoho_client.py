@@ -74,3 +74,23 @@ class ZohoClient:
             for chunk in resp.iter_content(chunk_size=8192):
                 f.write(chunk)
         return save_path
+
+    def get_associated_job_openings(self, record_id):
+        """Job Openings a candidate has applied to/is associated with."""
+        resp = requests.get(
+            f"{config.ZOHO_API_DOMAIN}/recruit/v2/Candidates/{record_id}/associate",
+            headers=self._headers(),
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_job_opening(self, job_opening_id, fields=None):
+        resp = requests.get(
+            f"{config.ZOHO_API_DOMAIN}/recruit/v2/JobOpenings/{job_opening_id}",
+            headers=self._headers(),
+            params={"fields": fields} if fields else None,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()
