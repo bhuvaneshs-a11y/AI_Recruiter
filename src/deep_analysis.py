@@ -55,7 +55,6 @@ JOB_FIT_PROPERTIES = {
     "skills_missing": {"type": "array", "items": {"type": "string"}},
     "experience_assessment": {"type": "string"},
     "career_trajectory_notes": {"type": "string"},
-    "suggested_interview_questions": {"type": "array", "items": {"type": "string"}},
 }
 
 JOB_FIT_REPORT_SCHEMA = copy.deepcopy(REPORT_SCHEMA)
@@ -72,9 +71,8 @@ def _job_fit_prompt_section(job_opening):
         "experience level. List which required skills they demonstrably have "
         "(skills_matched) and which they show no evidence of (skills_missing). Give "
         "an overall_fit_score (0-100), a confidence level (high/medium/low), an "
-        "experience_assessment, career_trajectory_notes (does their career path make "
-        "sense for this role), and 3-5 suggested_interview_questions to probe gaps "
-        "or verify claims relevant to this specific role.\n\n"
+        "experience_assessment, and career_trajectory_notes (does their career path "
+        "make sense for this role).\n\n"
         f"Job applied for: {job_opening.get('job_applied_for')}\n"
         f"Required skills: {job_opening.get('required_skills')}\n"
         f"Experience level required: {job_opening.get('experience_level')}\n"
@@ -301,9 +299,6 @@ def generate_deep_analysis_rule_based(verified_profile, job_opening=None):
                 f"Required experience level: {job_opening.get('experience_level') or 'unspecified'}."
             ),
             "career_trajectory_notes": "Not assessed in rule-based mode.",
-            "suggested_interview_questions": [
-                f"Can you describe your experience with {s}?" for s in missing[:5]
-            ],
         })
 
     return result
