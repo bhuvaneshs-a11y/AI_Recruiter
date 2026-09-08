@@ -1,4 +1,7 @@
-const API_BASE = "http://localhost:8000/api";
+// VITE_API_BASE lets a deployed build point at its real backend URL instead
+// of localhost - set it as a build-time env var on whatever host serves this
+// frontend (Vite only exposes env vars prefixed with VITE_ to client code).
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000/api";
 
 export async function fetchJobOpenings() {
   const res = await fetch(`${API_BASE}/job-openings`);

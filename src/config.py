@@ -6,11 +6,18 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
 
-DATA_DIR = ROOT_DIR / "data"
+# Overridable so a deployment can point this at a mounted persistent disk
+# (e.g. Render) instead of the app's own ephemeral filesystem, which gets
+# wiped on every redeploy/restart.
+DATA_DIR = Path(os.getenv("DATA_DIR") or (ROOT_DIR / "data"))
 RESUMES_DIR = DATA_DIR / "resumes"
 ANALYSIS_DIR = DATA_DIR / "analysis"
 RESUMES_DIR.mkdir(parents=True, exist_ok=True)
 ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Origins allowed to call the API (CORSMiddleware in api/app.py). Comma-separated
+# for multiple, e.g. "https://myapp.onrender.com,http://localhost:5173".
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
 
 ZOHO_CLIENT_ID = os.getenv("ZOHO_CLIENT_ID")
 ZOHO_CLIENT_SECRET = os.getenv("ZOHO_CLIENT_SECRET")
