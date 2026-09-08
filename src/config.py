@@ -26,3 +26,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{(DATA_DIR / 'ai_recruiter.db').as_posix()}"
+
+# How many candidates' pipelines (resume download -> LLM extraction -> link
+# verification -> LLM report) run at once in --zoho/API analysis. Each is
+# mostly spent waiting on external APIs (Zoho, GitHub, the LLM provider), so
+# running several concurrently cuts total wall-clock time substantially -
+# capped rather than unbounded to avoid bursting past those providers' own
+# rate limits.
+MAX_CONCURRENT_CANDIDATES = int(os.getenv("MAX_CONCURRENT_CANDIDATES", "4"))

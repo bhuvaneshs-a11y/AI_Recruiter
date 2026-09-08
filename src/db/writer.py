@@ -131,6 +131,56 @@ def save_analysis(zoho_id, full_name, email, phone, resume_file_path, backend,
         db.close()
 
 
+def get_job_opening_overrides(zoho_ids):
+    """Bulk-fetch persisted JD/prompt overrides for a set of Zoho job opening ids.
+    Returns {zoho_id: {"custom_description": ..., "custom_prompt": ...}} - job
+    openings with no override row yet (or no override values set) are simply
+    absent from the dict."""
+    db = SessionLocal()
+    try:
+        rows = db.query(JobOpening).filter(JobOpening.zoho_id.in_(zoho_ids)).all()
+        return {
+            row.zoho_id: {"custom_description": row.custom_description, "custom_prompt": row.custom_prompt}
+            for row in rows
+            if row.custom_description or row.custom_prompt
+        }
+    finally:
+        db.close()
+
+
+def get_job_opening_override(zoho_id):
+    overrides = get_job_opening_overrides([zoho_id])
+    return overrides.get(zoho_id)
+
+
+def save_job_opening_override(zoho_id, title, custom_description, custom_prompt):
+    """Persist a recruiter's edited JD / extra search prompt for a job opening,
+    upserting the JobOpening row by zoho_id since analysis may not have run for
+    it yet (title is stored so the row is identifiable even before that)."""
+    db = SessionLocal()
+    try:
+        row = db.query(JobOpening).filter_by(zoho_id=zoho_id).first()
+        if row:
+            row.custom_description = custom_description
+            row.custom_prompt = custom_prompt
+            row.title = row.title or title
+        else:
+            row = JobOpening(
+                zoho_id=zoho_id,
+                title=title,
+                custom_description=custom_description,
+                custom_prompt=custom_prompt,
+            )
+            db.add(row)
+        db.commit()
+        return {"custom_description": row.custom_description, "custom_prompt": row.custom_prompt}
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def save_failed_analysis(zoho_id, full_name, email, phone, resume_file_path, backend, error_message):
     """Persist a failed analysis attempt so it shows up in history instead of silently vanishing."""
     db = SessionLocal()

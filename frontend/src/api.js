@@ -6,12 +6,32 @@ export async function fetchJobOpenings() {
   return res.json();
 }
 
-export async function triggerAnalysis(limit, jobOpeningId) {
+export async function saveJobOpeningOverride(zohoId, title, customDescription, customPrompt) {
+  const res = await fetch(`${API_BASE}/job-openings/${zohoId}/override`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title,
+      custom_description: customDescription,
+      custom_prompt: customPrompt,
+    }),
+  });
+  if (!res.ok) throw new Error(`Failed to save job opening changes (${res.status})`);
+  return res.json();
+}
+
+export async function startAnalysis(limit, jobOpeningId) {
   const res = await fetch(`${API_BASE}/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ limit, job_opening_id: jobOpeningId || null }),
   });
   if (!res.ok) throw new Error(`Analysis request failed (${res.status})`);
-  return res.json();
+  return res.json(); // {job_id}
+}
+
+export async function fetchAnalysisJob(jobId) {
+  const res = await fetch(`${API_BASE}/analyze/${jobId}`);
+  if (!res.ok) throw new Error(`Failed to fetch analysis status (${res.status})`);
+  return res.json(); // {status, total, results, error}
 }

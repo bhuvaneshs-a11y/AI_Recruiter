@@ -65,7 +65,7 @@ JOB_FIT_REPORT_SCHEMA["required"] += list(JOB_FIT_PROPERTIES.keys())
 def _job_fit_prompt_section(job_opening):
     if not job_opening:
         return ""
-    return (
+    section = (
         "\n\nAdditionally, score how well this candidate fits the specific job below. "
         "Compare their skills and experience against the job's required skills and "
         "experience level. List which required skills they demonstrably have "
@@ -78,6 +78,14 @@ def _job_fit_prompt_section(job_opening):
         f"Experience level required: {job_opening.get('experience_level')}\n"
         f"Job description: {job_opening.get('job_description')}"
     )
+    if job_opening.get("additional_instructions"):
+        section += (
+            "\n\nThe recruiter has given the following additional search criteria for "
+            "this specific search - weigh these heavily, on top of the job description "
+            "above, when scoring fit and matched/missing skills:\n"
+            f"{job_opening['additional_instructions']}"
+        )
+    return section
 
 
 def verify_profile_links(profile):

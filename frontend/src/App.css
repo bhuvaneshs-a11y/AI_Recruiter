@@ -101,6 +101,57 @@ header h1 {
   margin-top: 8px;
 }
 
+.job-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #444;
+}
+
+.job-edit label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.9rem;
+}
+
+.job-edit textarea {
+  font-family: inherit;
+  font-size: 0.9rem;
+  background: #0f1115;
+  color: inherit;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 8px;
+  resize: vertical;
+}
+
+.job-edit .hint {
+  opacity: 0.7;
+  font-size: 0.8rem;
+  font-weight: normal;
+}
+
+.job-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.save-status {
+  font-size: 0.85rem;
+}
+
+.save-status.saved {
+  color: #2f855a;
+}
+
+.save-status.error {
+  color: #e5484d;
+}
+
 .link-button {
   background: none;
   border: none;
@@ -154,18 +205,43 @@ header h1 {
   gap: 12px;
 }
 
-.result-card {
+.results-table-wrap {
+  overflow-x: auto;
   border: 1px solid #444;
   border-radius: 8px;
-  padding: 16px;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.results-table th,
+.results-table td {
+  padding: 10px 14px;
   text-align: left;
+  border-bottom: 1px solid #444;
+  vertical-align: top;
+  white-space: nowrap;
 }
 
-.result-card h4 {
-  margin: 0 0 8px;
+.results-table th {
+  opacity: 0.7;
+  font-weight: normal;
 }
 
-.recommendation {
+.results-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.results-table .recommendation-cell {
   font-style: italic;
   opacity: 0.85;
+  white-space: normal;
+  min-width: 260px;
+}
+
+.results-table tr.best-row {
+  background: rgba(183, 121, 31, 0.1);
 }

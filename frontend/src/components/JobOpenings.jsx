@@ -1,5 +1,78 @@
 import { useEffect, useState } from "react";
-import { fetchJobOpenings } from "../api";
+import { fetchJobOpenings, saveJobOpeningOverride } from "../api";
+
+function JobCard({ job, expanded, onToggleExpand, onAnalyze }) {
+  const [description, setDescription] = useState(job.custom_description || job.description || "");
+  const [prompt, setPrompt] = useState(job.custom_prompt || "");
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+
+  const isOverridden = Boolean(job.custom_description);
+
+  async function handleSave() {
+    setSaveState("saving");
+    try {
+      await saveJobOpeningOverride(job.id, job.title, description, prompt);
+      setSaveState("saved");
+    } catch (e) {
+      setSaveState("error");
+    }
+  }
+
+  return (
+    <div className="job-card">
+      <div className="job-card-header" onClick={onToggleExpand}>
+        <h3>{job.title}</h3>
+        <span className="badge">{job.status}</span>
+      </div>
+      <div className="job-meta">
+        <span>{job.job_type || "—"}</span>
+        <span>{job.remote ? "Remote" : "On-site"}</span>
+        <span>{job.number_of_positions} position(s)</span>
+        <span>{job.industry || "—"}</span>
+      </div>
+      {job.required_skills && (
+        <p className="job-skills"><strong>Required skills:</strong> {job.required_skills}</p>
+      )}
+
+      {expanded && (
+        <div className="job-edit">
+          <label>
+            Job description {isOverridden && <span className="hint">(edited locally, not synced to Zoho)</span>}
+            <textarea
+              rows={8}
+              value={description}
+              onChange={(e) => { setDescription(e.target.value); setSaveState("idle"); }}
+            />
+          </label>
+          <label>
+            Search prompt <span className="hint">(optional - extra criteria for this job's applicant analysis, e.g. "must know Kubernetes, prioritize RAG experience")</span>
+            <textarea
+              rows={3}
+              value={prompt}
+              onChange={(e) => { setPrompt(e.target.value); setSaveState("idle"); }}
+            />
+          </label>
+          <div className="job-edit-actions">
+            <button onClick={handleSave} disabled={saveState === "saving"}>
+              {saveState === "saving" ? "Saving..." : "Save"}
+            </button>
+            {saveState === "saved" && <span className="save-status saved">Saved</span>}
+            {saveState === "error" && <span className="save-status error">Failed to save</span>}
+          </div>
+        </div>
+      )}
+
+      <div className="job-actions">
+        <button className="link-button" onClick={onToggleExpand}>
+          {expanded ? "Hide description & prompt" : "Edit description & prompt"}
+        </button>
+        <button className="analyze-button" onClick={() => onAnalyze(job)}>
+          Analyze Applicants
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export default function JobOpenings({ onAnalyze }) {
   const [jobs, setJobs] = useState([]);
@@ -21,34 +94,13 @@ export default function JobOpenings({ onAnalyze }) {
   return (
     <div className="job-openings">
       {jobs.map((job) => (
-        <div className="job-card" key={job.id}>
-          <div className="job-card-header" onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}>
-            <h3>{job.title}</h3>
-            <span className="badge">{job.status}</span>
-          </div>
-          <div className="job-meta">
-            <span>{job.job_type || "—"}</span>
-            <span>{job.remote ? "Remote" : "On-site"}</span>
-            <span>{job.number_of_positions} position(s)</span>
-            <span>{job.industry || "—"}</span>
-          </div>
-          {job.required_skills && (
-            <p className="job-skills"><strong>Required skills:</strong> {job.required_skills}</p>
-          )}
-          {expandedId === job.id && job.description && (
-            <p className="job-description">{job.description}</p>
-          )}
-          <div className="job-actions">
-            {job.description && (
-              <button className="link-button" onClick={() => setExpandedId(expandedId === job.id ? null : job.id)}>
-                {expandedId === job.id ? "Hide description" : "Show full description"}
-              </button>
-            )}
-            <button className="analyze-button" onClick={() => onAnalyze(job)}>
-              Analyze Applicants
-            </button>
-          </div>
-        </div>
+        <JobCard
+          key={job.id}
+          job={job}
+          expanded={expandedId === job.id}
+          onToggleExpand={() => setExpandedId(expandedId === job.id ? null : job.id)}
+          onAnalyze={onAnalyze}
+        />
       ))}
     </div>
   );

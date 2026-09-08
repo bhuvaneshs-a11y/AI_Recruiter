@@ -1,3 +1,4 @@
+import threading
 import time
 
 import requests
@@ -15,6 +16,12 @@ class ZohoClient:
     def __init__(self):
         self._access_token = None
         self._expires_at = 0
+        # Guards the check-and-refresh in _headers() - without this, concurrent
+        # candidate processing (see main.py's thread pool) could have multiple
+        # threads see an expired token at once and all call the refresh endpoint
+        # simultaneously, retriggering the same "too many requests" rate limit
+        # get_shared_client() was introduced to fix.
+        self._token_lock = threading.Lock()
 
     def _refresh_access_token(self):
         if not (config.ZOHO_CLIENT_ID and config.ZOHO_CLIENT_SECRET and config.ZOHO_REFRESH_TOKEN):
@@ -39,8 +46,9 @@ class ZohoClient:
         self._expires_at = time.time() + payload.get("expires_in", 3600) - 60
 
     def _headers(self):
-        if not self._access_token or time.time() >= self._expires_at:
-            self._refresh_access_token()
+        with self._token_lock:
+            if not self._access_token or time.time() >= self._expires_at:
+                self._refresh_access_token()
         return {"Authorization": f"Zoho-oauthtoken {self._access_token}"}
 
     def get_candidates(self, page=1, per_page=200, fields="id,Full_Name,Email"):

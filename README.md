@@ -146,12 +146,16 @@ A FastAPI backend (`src/api/`) + React frontend (`frontend/`) sit on top of the 
 logic, just a thin trigger/display layer. Two tabs:
 
 - **Active Job Openings** — every active Job Opening pulled live from Zoho, with an **Analyze Applicants**
-  button per job.
+  button per job. Each card can also be expanded to edit the job description and add an optional free-text
+  search prompt (extra criteria like "must know Kubernetes, prioritize RAG experience") — both are saved
+  locally (never written back to Zoho) and used the next time that job's applicants are analyzed.
 - **Run Analysis** — pick a job opening (or none, for job-agnostic analysis of the next N candidates) and a
   candidate cap, then run the pipeline from the browser. Clicking **Analyze Applicants** on a job jumps here
   with that job pre-selected. When a job is selected, only candidates who *actually applied to that job* are
-  fetched from Zoho and analyzed (a single job opening can have thousands of applicants, so the cap matters),
-  and results are ranked best-first by job-fit score, with the top result flagged **Best Match**.
+  fetched from Zoho and analyzed (a single job opening can have thousands of applicants, so the cap matters).
+  Candidates are processed several at a time (not one-by-one), results appear in a table as each candidate
+  finishes rather than all at once at the end, and once complete they're ranked best-first by job-fit score
+  with the top result flagged **Best Match**.
 
 Run both servers separately:
 

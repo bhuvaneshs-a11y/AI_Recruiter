@@ -1,9 +1,10 @@
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import config
-from db.writer import save_analysis, save_failed_analysis
+from db.writer import get_job_opening_override, save_analysis, save_failed_analysis
 from deep_analysis import (
     generate_deep_analysis,
     generate_deep_analysis_gemini,
@@ -46,12 +47,19 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None,
 
     job_opening_clean = None
     if job_opening:
+        # A recruiter-edited JD/prompt (see save_job_opening_override) takes
+        # precedence over Zoho's own Job_Description for the LLM prompt - it's
+        # a local-only override, never written back to Zoho.
+        override = get_job_opening_override(job_opening.get("id")) if job_opening.get("id") else None
         job_opening_clean = {
             "job_applied_for": job_opening.get("Posting_Title"),
-            "job_description": job_opening.get("Job_Description"),
+            "job_description": (override and override.get("custom_description"))
+                or job_opening.get("Job_Description"),
             "required_skills": job_opening.get("Required_Skills"),
             "experience_level": job_opening.get("Work_Experience"),
         }
+        if override and override.get("custom_prompt"):
+            job_opening_clean["additional_instructions"] = override["custom_prompt"]
 
     try:
         text = extract_text(resume_path)
@@ -115,58 +123,87 @@ def _find_resume_attachment(attachments):
     )
 
 
-def run_zoho(limit=None, client=None):
+def _run_concurrent(items, process_one, on_result=None):
+    """Runs process_one(item) for every item using a bounded thread pool
+    (config.MAX_CONCURRENT_CANDIDATES workers) instead of one at a time -
+    each candidate's pipeline is almost entirely spent waiting on external
+    APIs (Zoho, GitHub, the LLM), so running several concurrently cuts total
+    wall-clock time roughly proportionally to the worker count.
+
+    on_result(result), if given, is called from this (the calling) thread as
+    each result becomes available - as_completed() yields sequentially here,
+    so this never runs concurrently with itself and needs no locking of its
+    own. process_one returning None means "skip this item, no result".
+    """
+    results = []
+    with ThreadPoolExecutor(max_workers=config.MAX_CONCURRENT_CANDIDATES) as executor:
+        futures = [executor.submit(process_one, item) for item in items]
+        for future in as_completed(futures):
+            result = future.result()
+            if result is None:
+                continue
+            results.append(result)
+            if on_result:
+                on_result(result)
+    return results
+
+
+def run_zoho(limit=None, client=None, on_result=None, on_total=None):
     """Returns a list of {"zoho_id", "full_name", "report"} - report is None on failure.
     CLI usage ignores the return value; the API layer uses it to show results.
     Pass an existing client (e.g. zoho_client.get_shared_client()) to reuse a
     cached access token instead of refreshing one per call - Zoho separately
-    rate-limits the token-refresh endpoint itself."""
+    rate-limits the token-refresh endpoint itself.
+
+    on_result(result), if given, is called as each candidate finishes (not in
+    Zoho's listing order - completion order) so a caller can report live
+    progress instead of waiting for the whole batch. on_total(count), if
+    given, is called once candidates are known, before processing starts.
+    """
     client = client or ZohoClient()
+    candidates = []
     page = 1
-    processed = 0
-    results = []
-    while limit is None or processed < limit:
+    while limit is None or len(candidates) < limit:
         result = client.get_candidates(page=page, fields="id,Full_Name,Email,Phone")
-        candidates = result.get("data", [])
-        if not candidates:
+        page_candidates = result.get("data", [])
+        if not page_candidates:
             break
-
-        for candidate in candidates:
-            if limit is not None and processed >= limit:
-                break
-
-            record_id = candidate["id"]
-            attachments = client.list_attachments(record_id).get("data", [])
-            resume_attachment = _find_resume_attachment(attachments)
-            if not resume_attachment:
-                print(f"[{record_id}] no resume attachment found, skipping")
-                continue
-
-            job_openings = client.get_associated_job_openings(record_id).get("data", [])
-            job_opening = job_openings[0] if job_openings else None
-
-            file_name = resume_attachment["File_Name"]
-            save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
-            client.download_attachment(record_id, resume_attachment["id"], save_path)
-            report = process_resume(
-                save_path,
-                record_id,
-                full_name=candidate.get("Full_Name"),
-                email=candidate.get("Email"),
-                phone=candidate.get("Phone"),
-                job_opening=job_opening,
-            )
-            results.append({
-                "zoho_id": record_id,
-                "full_name": candidate.get("Full_Name"),
-                "report": report,
-            })
-            processed += 1
-
+        candidates.extend(page_candidates)
         if not result.get("info", {}).get("more_records"):
             break
         page += 1
+    if limit is not None:
+        candidates = candidates[:limit]
 
+    if on_total:
+        on_total(len(candidates))
+
+    def process_one(candidate):
+        record_id = candidate["id"]
+        attachments = client.list_attachments(record_id).get("data", [])
+        resume_attachment = _find_resume_attachment(attachments)
+        if not resume_attachment:
+            print(f"[{record_id}] no resume attachment found, skipping")
+            return None
+
+        job_openings = client.get_associated_job_openings(record_id).get("data", [])
+        job_opening = job_openings[0] if job_openings else None
+
+        file_name = resume_attachment["File_Name"]
+        save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
+        client.download_attachment(record_id, resume_attachment["id"], save_path)
+        report = process_resume(
+            save_path,
+            record_id,
+            full_name=candidate.get("Full_Name"),
+            email=candidate.get("Email"),
+            phone=candidate.get("Phone"),
+            job_opening=job_opening,
+        )
+        return {"zoho_id": record_id, "full_name": candidate.get("Full_Name"), "report": report}
+
+    results = _run_concurrent(candidates, process_one, on_result)
+    results.sort(key=_rank_key, reverse=True)
     return results
 
 
@@ -180,13 +217,15 @@ def _rank_key(result):
     return fit if fit is not None else report.get("overall_credibility_score", 0)
 
 
-def run_zoho_for_job(job_opening_id, limit=None, client=None):
+def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on_total=None):
     """Analyze candidates who applied to a specific Job Opening, returned best-first.
 
     A job opening can have thousands of applicants (seen live: 6,424 for one
     role) - `limit` caps how many are actually processed by the pipeline, not
     how many total applicants exist. The most recent applications are
     processed first (Zoho's default Applications ordering).
+
+    on_result / on_total: see run_zoho() - same live-progress callbacks.
     """
     client = client or ZohoClient()
 
@@ -199,11 +238,13 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None):
     if limit is not None:
         applications = applications[:limit]
 
-    results = []
-    for app in applications:
+    if on_total:
+        on_total(len(applications))
+
+    def process_one(app):
         record_id = app.get("$Candidate_Id")
         if not record_id:
-            continue
+            return None
 
         full_name = app.get("Full_Name")
         email = app.get("Email")
@@ -212,8 +253,7 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None):
         attachments = client.list_attachments(record_id).get("data", [])
         resume_attachment = _find_resume_attachment(attachments)
         if not resume_attachment:
-            results.append({"zoho_id": record_id, "full_name": full_name, "report": None})
-            continue
+            return {"zoho_id": record_id, "full_name": full_name, "report": None}
 
         file_name = resume_attachment["File_Name"]
         save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
@@ -223,8 +263,9 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None):
             full_name=full_name, email=email, phone=phone,
             job_opening=job_opening,
         )
-        results.append({"zoho_id": record_id, "full_name": full_name, "report": report})
+        return {"zoho_id": record_id, "full_name": full_name, "report": report}
 
+    results = _run_concurrent(applications, process_one, on_result)
     results.sort(key=_rank_key, reverse=True)
     return results
 

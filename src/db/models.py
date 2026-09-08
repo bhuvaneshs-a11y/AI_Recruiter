@@ -32,6 +32,13 @@ class JobOpening(Base):
     experience_level = Column(String)
     created_at = Column(DateTime, server_default=func.current_timestamp())
 
+    # Recruiter-editable overrides, never written back to Zoho. custom_description
+    # replaces `description` in the job-fit prompt when set; custom_prompt is free-form
+    # extra search criteria (e.g. "must have Kubernetes, prioritize RAG experience")
+    # appended to the same prompt.
+    custom_description = Column(Text)
+    custom_prompt = Column(Text)
+
     applications = relationship("Application", back_populates="job_opening")
 
 
