@@ -33,6 +33,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 DATABASE_URL = os.getenv("DATABASE_URL") or f"sqlite:///{(DATA_DIR / 'ai_recruiter.db').as_posix()}"
+# Render (and Heroku-style hosts before it) hand out connection strings as
+# postgres://, a scheme SQLAlchemy 1.4+ rejects outright - it wants
+# postgresql:// instead. Normalizing here means the env var can be pasted in
+# verbatim from the host's dashboard with no manual editing.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 # How many candidates' pipelines (resume download -> LLM extraction -> link
 # verification -> LLM report) run at once in --zoho/API analysis. Each is
