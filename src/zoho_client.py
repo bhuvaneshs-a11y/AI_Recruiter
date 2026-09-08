@@ -108,6 +108,12 @@ class ZohoClient:
         different job openings could in theory share the same title, this then
         double-checks the exact job_opening_id client-side on the (much smaller)
         returned set for correctness.
+
+        Applications with Application_Status == "Rejected" are excluded - a
+        candidate rejected earlier for this job shouldn't be re-surfaced and
+        re-analyzed every time this job's applicants are pulled. Confirmed live
+        against one job's 4,899 applications: Application_Status and
+        Hiring_Pipeline agreed exactly on which 258 were "Rejected".
         """
         all_apps = []
         page = 1
@@ -127,7 +133,10 @@ class ZohoClient:
             if not data.get("info", {}).get("more_records"):
                 break
             page += 1
-        return [a for a in all_apps if a.get("$Job_Opening_Id") == job_opening_id]
+        return [
+            a for a in all_apps
+            if a.get("$Job_Opening_Id") == job_opening_id and a.get("Application_Status") != "Rejected"
+        ]
 
     def get_job_opening(self, job_opening_id, fields=None):
         resp = requests.get(
