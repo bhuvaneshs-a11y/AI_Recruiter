@@ -10,6 +10,11 @@ class ZohoAuthError(RuntimeError):
     pass
 
 
+# Application_Status values that mean "not a real candidacy to analyze" -
+# see get_applications_for_job() below.
+EXCLUDED_APPLICATION_STATUSES = {"Rejected", "Junk candidate"}
+
+
 class ZohoClient:
     """Minimal Zoho Recruit v2 client: token refresh, candidate listing, attachment download."""
 
@@ -109,11 +114,14 @@ class ZohoClient:
         double-checks the exact job_opening_id client-side on the (much smaller)
         returned set for correctness.
 
-        Applications with Application_Status == "Rejected" are excluded - a
-        candidate rejected earlier for this job shouldn't be re-surfaced and
-        re-analyzed every time this job's applicants are pulled. Confirmed live
-        against one job's 4,899 applications: Application_Status and
-        Hiring_Pipeline agreed exactly on which 258 were "Rejected".
+        Applications with Application_Status in EXCLUDED_APPLICATION_STATUSES
+        are excluded - "Rejected" (reviewed and passed on) and "Junk candidate"
+        (spam/irrelevant/duplicate, never a real candidacy) shouldn't be
+        re-surfaced and re-analyzed every time this job's applicants are
+        pulled. Confirmed live against one job's 4,899 applications:
+        Application_Status and the coarser Hiring_Pipeline field agreed
+        exactly on which 258 were "Rejected"; "Junk candidate" (323) has no
+        Hiring_Pipeline equivalent, it's Application_Status-only.
         """
         all_apps = []
         page = 1
@@ -135,7 +143,8 @@ class ZohoClient:
             page += 1
         return [
             a for a in all_apps
-            if a.get("$Job_Opening_Id") == job_opening_id and a.get("Application_Status") != "Rejected"
+            if a.get("$Job_Opening_Id") == job_opening_id
+            and a.get("Application_Status") not in EXCLUDED_APPLICATION_STATUSES
         ]
 
     def get_job_opening(self, job_opening_id, fields=None):
