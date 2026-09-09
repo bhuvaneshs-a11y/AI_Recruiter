@@ -122,6 +122,20 @@ class ZohoClient:
         Application_Status and the coarser Hiring_Pipeline field agreed
         exactly on which 258 were "Rejected"; "Junk candidate" (323) has no
         Hiring_Pipeline equivalent, it's Application_Status-only.
+
+        Explicitly sorted by Created_Time desc (most-recently-applied first).
+        Without an explicit sort_by, this endpoint's default order is NOT
+        based on Created_Time, Updated_On, or Last_Activity_Time (confirmed
+        live: Created_Time values came back completely out of sequence) - it
+        looked stable across two immediate back-to-back calls, but with no
+        documented ordering guarantee it could silently reshuffle later (new
+        applications arriving, records being touched, etc.), which would
+        change who ends up in the first N of a limited pull for no
+        status-related reason. Sorting by Created_Time is safe to rely on
+        precisely because that field is set once at creation and never
+        changes - so which applications rank first is now stable across
+        repeated searches unless the actual population of eligible (non-
+        excluded) applications changes.
         """
         all_apps = []
         page = 1
@@ -132,6 +146,7 @@ class ZohoClient:
                 params={
                     "criteria": f"(Job_Opening_Name:equals:{job_title})",
                     "page": page, "per_page": 200,
+                    "sort_by": "Created_Time", "sort_order": "desc",
                 },
                 timeout=30,
             )
