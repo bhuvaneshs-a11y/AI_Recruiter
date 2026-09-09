@@ -1,5 +1,7 @@
 import json
 
+from sqlalchemy.exc import IntegrityError
+
 from db.models import Application, Candidate, JobOpening, ProjectVerification, ResumeAnalysis
 from db.session import SessionLocal
 
@@ -25,24 +27,52 @@ def _get_or_create_candidate(db, zoho_id, full_name, email, phone, resume_file_p
 
 
 def _get_or_create_job_opening(db, job_opening):
+    """Upserts a JobOpening row using the caller's session, returns it.
+
+    Candidates now process concurrently (see main._run_concurrent), so
+    multiple candidates applied to the SAME job can reach this within
+    moments of each other, each in its own save_analysis() call with its own
+    session. If two of those sessions both see no existing row for a
+    brand-new zoho_id and both try to insert, the second violates the unique
+    constraint on zoho_id - confirmed live on the deployed Postgres backend
+    (SQLite's single-writer-per-file lock had been masking this race
+    locally; Postgres genuinely allows two sessions to race like this).
+
+    The insert runs inside a SAVEPOINT (db.begin_nested()) so a failed
+    attempt only rolls back this insert, not whatever else the caller's
+    session already flushed earlier in the same transaction (e.g. the
+    candidate row) - a plain db.rollback() would have discarded that too.
+    A separate session/connection was tried first but self-deadlocks on
+    SQLite (the caller's still-open transaction already holds the file's
+    only write lock), so this stays on the caller's own session instead.
+    """
     zoho_id = job_opening["id"]
-    row = db.query(JobOpening).filter_by(zoho_id=zoho_id).first()
     required_skills = [s.strip() for s in (job_opening.get("Required_Skills") or "").split(",") if s.strip()]
+    row = db.query(JobOpening).filter_by(zoho_id=zoho_id).first()
     if row:
         row.title = job_opening.get("Posting_Title") or row.title
         row.description = job_opening.get("Job_Description") or row.description
         row.required_skills = json.dumps(required_skills, ensure_ascii=False)
         row.experience_level = job_opening.get("Work_Experience") or row.experience_level
-    else:
-        row = JobOpening(
-            zoho_id=zoho_id,
-            title=job_opening.get("Posting_Title"),
-            description=job_opening.get("Job_Description"),
-            required_skills=json.dumps(required_skills, ensure_ascii=False),
-            experience_level=job_opening.get("Work_Experience"),
-        )
-        db.add(row)
-    db.flush()
+        db.flush()
+        return row
+
+    try:
+        with db.begin_nested():
+            row = JobOpening(
+                zoho_id=zoho_id,
+                title=job_opening.get("Posting_Title"),
+                description=job_opening.get("Job_Description"),
+                required_skills=json.dumps(required_skills, ensure_ascii=False),
+                experience_level=job_opening.get("Work_Experience"),
+            )
+            db.add(row)
+            db.flush()
+    except IntegrityError:
+        # Lost the race - another session's insert for this zoho_id already
+        # committed (that's the only way our unique constraint check could
+        # have failed), so it's guaranteed visible now.
+        row = db.query(JobOpening).filter_by(zoho_id=zoho_id).first()
     return row
 
 
