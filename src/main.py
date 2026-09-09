@@ -200,7 +200,14 @@ def run_zoho(limit=None, client=None, on_result=None, on_total=None):
             phone=candidate.get("Phone"),
             job_opening=job_opening,
         )
-        return {"zoho_id": record_id, "full_name": candidate.get("Full_Name"), "report": report}
+        result = {"zoho_id": record_id, "full_name": candidate.get("Full_Name"), "report": report}
+        if report is None:
+            # process_resume() already logged/saved the real error - this is a
+            # genuinely different failure than "no resume attachment" above
+            # (e.g. a corrupted file, or an LLM/rate-limit error), and the UI
+            # must not conflate the two.
+            result["failure_reason"] = "processing_error"
+        return result
 
     results = _run_concurrent(candidates, process_one, on_result)
     results.sort(key=_rank_key, reverse=True)
@@ -253,7 +260,8 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
         attachments = client.list_attachments(record_id).get("data", [])
         resume_attachment = _find_resume_attachment(attachments)
         if not resume_attachment:
-            return {"zoho_id": record_id, "full_name": full_name, "report": None}
+            return {"zoho_id": record_id, "full_name": full_name, "report": None,
+                     "failure_reason": "no_resume_attachment"}
 
         file_name = resume_attachment["File_Name"]
         save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
@@ -263,7 +271,14 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
             full_name=full_name, email=email, phone=phone,
             job_opening=job_opening,
         )
-        return {"zoho_id": record_id, "full_name": full_name, "report": report}
+        result = {"zoho_id": record_id, "full_name": full_name, "report": report}
+        if report is None:
+            # process_resume() already logged/saved the real error - this is a
+            # genuinely different failure than "no resume attachment" above
+            # (e.g. a corrupted file, or an LLM/rate-limit error), and the UI
+            # must not conflate the two.
+            result["failure_reason"] = "processing_error"
+        return result
 
     results = _run_concurrent(applications, process_one, on_result)
     results.sort(key=_rank_key, reverse=True)

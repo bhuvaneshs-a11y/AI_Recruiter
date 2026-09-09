@@ -145,7 +145,9 @@ export default function RunAnalysis({ initialJob, onJobConsumed }) {
                         </>
                       ) : (
                         <td className="error" colSpan={selectedJobId ? 4 : 2}>
-                          Failed to analyze (no resume attachment found)
+                          {r.failure_reason === "processing_error"
+                            ? "Failed to analyze (resume parsing/verification/LLM error - check server logs)"
+                            : "Failed to analyze (no resume attachment found)"}
                         </td>
                       )}
                     </tr>
