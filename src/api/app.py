@@ -15,3 +15,12 @@ app.add_middleware(
 
 app.include_router(job_openings.router, prefix="/api")
 app.include_router(analyze.router, prefix="/api")
+
+
+@app.get("/api/health")
+def health():
+    """No DB/Zoho calls - just proves the process is alive and responding.
+    Meant for an external uptime pinger to hit every ~10 min on free-tier
+    hosts (e.g. Render) that spin the service down after 15 min idle, so it
+    never goes idle long enough to spin down in the first place."""
+    return {"status": "ok"}
