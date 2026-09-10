@@ -93,6 +93,12 @@ Gemini model IDs have proven **volatile in practice**: two model names 404'd out
 
 Analysis results are stored in this local SQLite DB as the source of truth, **not written back to Zoho** — Zoho custom fields are flat types and can't hold structured data like per-project verification arrays, and the longer-term goal is a standalone app (shortlisting, interviews) that outgrows being a Zoho annotation layer.
 
+#### Resolved: "SSL connection has been closed unexpectedly" (Neon autosuspend)
+
+- **Error**: `psycopg2.OperationalError: SSL connection has been closed unexpectedly`, surfacing as `status: "error"` on an `/api/analyze` poll, on any query hitting the deployed Postgres (Neon) backend.
+- **Root cause**: Neon's free tier autosuspends its compute after a period of no activity. A connection SQLAlchemy's pool was holding onto from before the suspend is silently dead on Neon's end — the pool doesn't know that, hands it out anyway, and the query fails outright the moment it's used. Confirmed live: a job stuck at `total: null` for 6+ minutes (a plain DB `SELECT` on `job_openings`, not even a slow one) turned out to be this, not a hang or a Gemini/rate-limit issue.
+- **Fix**: `db/session.py`'s engine now sets `pool_pre_ping=True` (tests each pooled connection with a lightweight query before handing it to a caller, transparently reconnecting if it's actually dead) and `pool_recycle=300` (proactively drops connections older than 5 minutes, ahead of Neon's own autosuspend window). Applied unconditionally (harmless on local SQLite too) rather than branching by `DATABASE_URL` scheme.
+
 ### Web UI
 
 `src/api/` (FastAPI) + `frontend/` (React/Vite, plain JS) — a thin layer over the same pipeline, not a second implementation. Two tabs: **Active Job Openings** (live from Zoho, via `GET /api/job-openings`) and **Run Analysis** (`POST /api/analyze`, body `{limit, job_opening_id}`). Clicking "Analyze Applicants" on a job card jumps to Run Analysis with that job pre-selected (lifted state in `App.jsx`).
