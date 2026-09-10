@@ -15,6 +15,9 @@ export default function RunAnalysis({ initialJob, onJobConsumed }) {
   const [jobStatus, setJobStatus] = useState("idle"); // idle | running | done | error
   const pollRef = useRef(null);
 
+  const selectedJob = jobs.find((j) => j.id === selectedJobId);
+  const hasSearchPrompt = Boolean(selectedJob?.custom_prompt);
+
   useEffect(() => {
     fetchJobOpenings()
       .then(setJobs)
@@ -99,9 +102,10 @@ export default function RunAnalysis({ initialJob, onJobConsumed }) {
 
       {running && (
         <p className="hint">
-          Processing {total !== null ? `${results.length} of ${total}` : "..."} candidates
-          (several run concurrently) - each involves real resume parsing, GitHub/portfolio
-          verification, and LLM scoring, so this can still take a while.
+          {hasSearchPrompt
+            ? `Searching for ${total !== null ? total : "..."} candidate(s) matching this job's saved search prompt (${results.length} found so far) - candidates that don't match are skipped automatically, and the search keeps going deeper into the applicant pool until enough matches are found.`
+            : `Processing ${total !== null ? `${results.length} of ${total}` : "..."} candidates (several run concurrently)`}
+          {" "}- each involves real resume parsing, GitHub/portfolio verification, and LLM scoring, so this can still take a while.
         </p>
       )}
 

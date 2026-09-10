@@ -61,6 +61,20 @@ JOB_FIT_REPORT_SCHEMA = copy.deepcopy(REPORT_SCHEMA)
 JOB_FIT_REPORT_SCHEMA["properties"].update(JOB_FIT_PROPERTIES)
 JOB_FIT_REPORT_SCHEMA["required"] += list(JOB_FIT_PROPERTIES.keys())
 
+# Used by main.py's search-prompt pre-filter (see check_candidate_match below) -
+# deliberately tiny/cheap compared to REPORT_SCHEMA, since this runs on every
+# candidate in a job's applicant pool just to decide whether to bother with
+# the full (expensive) analysis at all.
+MATCH_CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "matches": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+    "required": ["matches", "reason"],
+    "additionalProperties": False,
+}
+
 
 def _job_fit_prompt_section(job_opening):
     if not job_opening:
@@ -138,6 +152,37 @@ def generate_deep_analysis(verified_profile, job_opening=None):
     return json.loads(text)
 
 
+def check_candidate_match(profile, criteria):
+    """Cheap pre-filter used by main.run_zoho_for_job() when a job has a saved
+    search prompt (e.g. "must have graduated in 2025") - decides whether a
+    candidate satisfies free-text eligibility criteria using only the
+    extracted profile, BEFORE running the expensive link-verification + full
+    report generation steps on candidates that wouldn't have been selected
+    anyway. Only ever called when criteria is truthy."""
+    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=512,
+        output_config={
+            "effort": "low",
+            "format": {"type": "json_schema", "schema": MATCH_CHECK_SCHEMA},
+        },
+        messages=[{
+            "role": "user",
+            "content": (
+                "Decide whether this candidate satisfies the following eligibility "
+                "criteria, based only on what's stated in their profile. If the "
+                "profile doesn't contain enough information to confirm the criteria, "
+                "treat it as not satisfied (matches: false) rather than assuming.\n\n"
+                f"Criteria: {criteria}\n\n"
+                f"Candidate profile:\n{json.dumps(profile, indent=2)}"
+            ),
+        }],
+    )
+    text = next(b.text for b in response.content if b.type == "text")
+    return json.loads(text)
+
+
 def _strip_additional_properties(schema):
     """Gemini's structured-output schema support is a subset of JSON Schema and
     may not recognize additionalProperties - strip it recursively to be safe."""
@@ -154,6 +199,28 @@ def _strip_additional_properties(schema):
 
 GEMINI_REPORT_SCHEMA = _strip_additional_properties(REPORT_SCHEMA)
 GEMINI_JOB_FIT_REPORT_SCHEMA = _strip_additional_properties(JOB_FIT_REPORT_SCHEMA)
+GEMINI_MATCH_CHECK_SCHEMA = _strip_additional_properties(MATCH_CHECK_SCHEMA)
+
+
+def check_candidate_match_gemini(profile, criteria):
+    """Gemini equivalent of check_candidate_match() - see that docstring."""
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
+    response = client.models.generate_content(
+        model=config.GEMINI_MODEL,
+        contents=(
+            "Decide whether this candidate satisfies the following eligibility "
+            "criteria, based only on what's stated in their profile. If the "
+            "profile doesn't contain enough information to confirm the criteria, "
+            "treat it as not satisfied (matches: false) rather than assuming.\n\n"
+            f"Criteria: {criteria}\n\n"
+            f"Candidate profile:\n{json.dumps(profile, indent=2)}"
+        ),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_json_schema=GEMINI_MATCH_CHECK_SCHEMA,
+        ),
+    )
+    return json.loads(response.text)
 
 
 def generate_deep_analysis_gemini(verified_profile, job_opening=None):
@@ -235,6 +302,14 @@ def _match_skills(candidate_skills, required_skills_str):
         else:
             missing.append(req)
     return matched, missing
+
+
+def check_candidate_match_rule_based(profile, criteria):
+    """No LLM available to interpret free-text criteria - the rule-based
+    backend can't evaluate this (same limitation as _match_skills() below,
+    which also can't interpret additional_instructions), so every candidate
+    passes the filter rather than silently excluding everyone."""
+    return {"matches": True, "reason": "Rule-based backend cannot evaluate free-text search criteria; not filtered."}
 
 
 def generate_deep_analysis_rule_based(verified_profile, job_opening=None):

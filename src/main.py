@@ -6,6 +6,9 @@ from pathlib import Path
 import config
 from db.writer import get_job_opening_override, save_analysis, save_failed_analysis
 from deep_analysis import (
+    check_candidate_match,
+    check_candidate_match_gemini,
+    check_candidate_match_rule_based,
     generate_deep_analysis,
     generate_deep_analysis_gemini,
     generate_deep_analysis_rule_based,
@@ -38,11 +41,22 @@ ANALYZE_BY_BACKEND = {
     "rule_based": generate_deep_analysis_rule_based,
 }
 
+MATCH_CHECK_BY_BACKEND = {
+    "claude": check_candidate_match,
+    "gemini": check_candidate_match_gemini,
+    "rule_based": check_candidate_match_rule_based,
+}
 
-def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None, job_opening=None):
+
+def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None, job_opening=None, profile=None):
     """job_opening: raw dict from ZohoClient.get_associated_job_openings() data[0] - kept
     in Zoho's own field names here since save_analysis()/db.writer need those, but
-    converted to a clean shape below for the LLM prompt and JSON output."""
+    converted to a clean shape below for the LLM prompt and JSON output.
+
+    profile: pass an already-extracted profile to skip re-extracting it here -
+    used by the search-prompt pre-filter in run_zoho_for_job(), which must
+    extract the profile BEFORE deciding (via a match-check) whether the rest
+    of this (expensive) pipeline is even worth running."""
     backend = _select_backend()
 
     job_opening_clean = None
@@ -62,10 +76,10 @@ def process_resume(resume_path, zoho_id, full_name=None, email=None, phone=None,
             job_opening_clean["additional_instructions"] = override["custom_prompt"]
 
     try:
-        text = extract_text(resume_path)
-        extra_links = extract_links(resume_path)
-
-        profile = EXTRACT_BY_BACKEND[backend](text, extra_links)
+        if profile is None:
+            text = extract_text(resume_path)
+            extra_links = extract_links(resume_path)
+            profile = EXTRACT_BY_BACKEND[backend](text, extra_links)
         verified_profile = verify_profile_links(profile)
         report = ANALYZE_BY_BACKEND[backend](verified_profile, job_opening_clean)
     except Exception as e:
@@ -145,6 +159,38 @@ def _run_concurrent(items, process_one, on_result=None):
             results.append(result)
             if on_result:
                 on_result(result)
+    return results
+
+
+def _run_concurrent_until_target(items, process_one, target_count, on_result=None):
+    """Like _run_concurrent(), but for the search-prompt filtering case where
+    we don't want to process every item - we want the first `target_count`
+    items for which process_one() returns a non-None result, trying further
+    into `items` only as needed (a job's applicant pool can be thousands of
+    entries; most won't match a specific eligibility criterion).
+
+    Submits work in chunks (config.MAX_CONCURRENT_CANDIDATES at a time)
+    rather than all of `items` at once, stopping once enough successes have
+    come in - unlike _run_concurrent(), which always processes its full
+    input list. A chunk already in flight when the target is reached is
+    still allowed to finish (not cancelled), so this can slightly overshoot
+    target_count; that's a deliberate simplification, not a bug.
+    """
+    results = []
+    chunk_size = max(1, config.MAX_CONCURRENT_CANDIDATES)
+    idx = 0
+    with ThreadPoolExecutor(max_workers=config.MAX_CONCURRENT_CANDIDATES) as executor:
+        while idx < len(items) and len(results) < target_count:
+            chunk = items[idx: idx + chunk_size]
+            idx += chunk_size
+            futures = [executor.submit(process_one, item) for item in chunk]
+            for future in as_completed(futures):
+                result = future.result()
+                if result is None:
+                    continue
+                results.append(result)
+                if on_result:
+                    on_result(result)
     return results
 
 
@@ -232,7 +278,20 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
     how many total applicants exist. The most recent applications are
     processed first (Zoho's default Applications ordering).
 
-    on_result / on_total: see run_zoho() - same live-progress callbacks.
+    If the job has a saved search prompt (see save_job_opening_override), this
+    switches into filtering mode: candidates are pre-checked against that
+    prompt's criteria (e.g. "must have graduated in 2025") using only their
+    extracted profile, BEFORE running the full (expensive) analysis. Non-
+    matching candidates are skipped entirely - not shown as failures, not
+    counted toward `limit` - and the search keeps going further into the
+    applicant pool until `limit` genuine matches are found or the pool is
+    exhausted. Without a search prompt, behavior is unchanged: the first
+    `limit` applications (in order) are all analyzed and shown, matching or not.
+
+    on_result / on_total: see run_zoho() - same live-progress callbacks. In
+    filtering mode, on_total reports the target (how many matches we're
+    trying to find), not how many applications will be attempted (unknown
+    upfront - could be the entire pool).
     """
     client = client or ZohoClient()
 
@@ -242,11 +301,58 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
         raise ValueError(f"Job opening {job_opening_id} not found")
 
     applications = client.get_applications_for_job(job_opening_id, job_opening.get("Posting_Title"))
-    if limit is not None:
-        applications = applications[:limit]
 
+    override = get_job_opening_override(job_opening_id)
+    search_prompt = override.get("custom_prompt") if override else None
+
+    if not search_prompt:
+        if limit is not None:
+            applications = applications[:limit]
+        if on_total:
+            on_total(len(applications))
+
+        def process_one(app):
+            record_id = app.get("$Candidate_Id")
+            if not record_id:
+                return None
+
+            full_name = app.get("Full_Name")
+            email = app.get("Email")
+            phone = app.get("Mobile") or app.get("Phone")
+
+            attachments = client.list_attachments(record_id).get("data", [])
+            resume_attachment = _find_resume_attachment(attachments)
+            if not resume_attachment:
+                return {"zoho_id": record_id, "full_name": full_name, "report": None,
+                         "failure_reason": "no_resume_attachment"}
+
+            file_name = resume_attachment["File_Name"]
+            save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
+            client.download_attachment(record_id, resume_attachment["id"], save_path)
+            report = process_resume(
+                save_path, record_id,
+                full_name=full_name, email=email, phone=phone,
+                job_opening=job_opening,
+            )
+            result = {"zoho_id": record_id, "full_name": full_name, "report": report}
+            if report is None:
+                # process_resume() already logged/saved the real error - this is a
+                # genuinely different failure than "no resume attachment" above
+                # (e.g. a corrupted file, or an LLM/rate-limit error), and the UI
+                # must not conflate the two.
+                result["failure_reason"] = "processing_error"
+            return result
+
+        results = _run_concurrent(applications, process_one, on_result)
+        results.sort(key=_rank_key, reverse=True)
+        return results
+
+    # Filtering mode - a search prompt was saved for this job.
+    target_count = limit if limit is not None else len(applications)
     if on_total:
-        on_total(len(applications))
+        on_total(target_count)
+
+    backend = _select_backend()
 
     def process_one(app):
         record_id = app.get("$Candidate_Id")
@@ -260,27 +366,39 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
         attachments = client.list_attachments(record_id).get("data", [])
         resume_attachment = _find_resume_attachment(attachments)
         if not resume_attachment:
-            return {"zoho_id": record_id, "full_name": full_name, "report": None,
-                     "failure_reason": "no_resume_attachment"}
+            # Can't even check this candidate against the criteria - skip and
+            # keep searching, same as a non-match (see module docstring above).
+            return None
 
         file_name = resume_attachment["File_Name"]
         save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
         client.download_attachment(record_id, resume_attachment["id"], save_path)
+
+        try:
+            text = extract_text(save_path)
+            extra_links = extract_links(save_path)
+            profile = EXTRACT_BY_BACKEND[backend](text, extra_links)
+        except Exception as e:
+            print(f"[{record_id}] profile extraction FAILED during search-prompt pre-check: {e}")
+            return None
+
+        match_result = MATCH_CHECK_BY_BACKEND[backend](profile, search_prompt)
+        if not match_result.get("matches"):
+            return None
+
         report = process_resume(
             save_path, record_id,
             full_name=full_name, email=email, phone=phone,
-            job_opening=job_opening,
+            job_opening=job_opening, profile=profile,
         )
-        result = {"zoho_id": record_id, "full_name": full_name, "report": report}
         if report is None:
-            # process_resume() already logged/saved the real error - this is a
-            # genuinely different failure than "no resume attachment" above
-            # (e.g. a corrupted file, or an LLM/rate-limit error), and the UI
-            # must not conflate the two.
-            result["failure_reason"] = "processing_error"
-        return result
+            # Matched the search prompt but the full analysis itself failed -
+            # don't count this as one of our `limit` results; keep searching
+            # for a genuine replacement instead of surfacing a partial failure.
+            return None
+        return {"zoho_id": record_id, "full_name": full_name, "report": report}
 
-    results = _run_concurrent(applications, process_one, on_result)
+    results = _run_concurrent_until_target(applications, process_one, target_count, on_result)
     results.sort(key=_rank_key, reverse=True)
     return results
 
