@@ -6,6 +6,7 @@ from google import genai
 from google.genai import types
 
 import config
+from gemini_rate_limiter import call_gemini
 from link_verifier import verify_link
 
 MODEL = "claude-opus-5"
@@ -205,7 +206,7 @@ GEMINI_MATCH_CHECK_SCHEMA = _strip_additional_properties(MATCH_CHECK_SCHEMA)
 def check_candidate_match_gemini(profile, criteria):
     """Gemini equivalent of check_candidate_match() - see that docstring."""
     client = genai.Client(api_key=config.GEMINI_API_KEY)
-    response = client.models.generate_content(
+    response = call_gemini(lambda: client.models.generate_content(
         model=config.GEMINI_MODEL,
         contents=(
             "Decide whether this candidate satisfies the following eligibility "
@@ -219,7 +220,7 @@ def check_candidate_match_gemini(profile, criteria):
             response_mime_type="application/json",
             response_json_schema=GEMINI_MATCH_CHECK_SCHEMA,
         ),
-    )
+    ))
     return json.loads(response.text)
 
 
@@ -228,7 +229,7 @@ def generate_deep_analysis_gemini(verified_profile, job_opening=None):
     ANTHROPIC_API_KEY isn't available."""
     schema = GEMINI_JOB_FIT_REPORT_SCHEMA if job_opening else GEMINI_REPORT_SCHEMA
     client = genai.Client(api_key=config.GEMINI_API_KEY)
-    response = client.models.generate_content(
+    response = call_gemini(lambda: client.models.generate_content(
         model=config.GEMINI_MODEL,
         contents=(
             "You are reviewing a candidate profile extracted from a resume, where "
@@ -248,7 +249,7 @@ def generate_deep_analysis_gemini(verified_profile, job_opening=None):
             response_mime_type="application/json",
             response_json_schema=schema,
         ),
-    )
+    ))
     return json.loads(response.text)
 
 

@@ -4,6 +4,7 @@ from google import genai
 from google.genai import types
 
 import config
+from gemini_rate_limiter import call_gemini
 from resume_analyzer import PROFILE_SCHEMA
 
 
@@ -39,7 +40,7 @@ def extract_candidate_profile(resume_text, extra_links=None):
     )
 
     client = genai.Client(api_key=config.GEMINI_API_KEY)
-    response = client.models.generate_content(
+    response = call_gemini(lambda: client.models.generate_content(
         model=config.GEMINI_MODEL,
         contents=(
             "Extract a structured candidate profile from this resume text. "
@@ -52,5 +53,5 @@ def extract_candidate_profile(resume_text, extra_links=None):
             response_mime_type="application/json",
             response_json_schema=GEMINI_PROFILE_SCHEMA,
         ),
-    )
+    ))
     return json.loads(response.text)
