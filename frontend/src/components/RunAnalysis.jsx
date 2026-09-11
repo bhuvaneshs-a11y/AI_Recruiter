@@ -118,6 +118,13 @@ export default function RunAnalysis({ initialJob, onJobConsumed }) {
               ? `Processed ${results.length} candidate(s)${selectedJobId ? ", ranked best fit first" : ""}`
               : `${results.length}${total !== null ? ` of ${total}` : ""} candidate(s) done so far...`}
           </h3>
+          {jobStatus === "done" && selectedJobId && total !== null && results.length < total && (
+            <p className="hint">
+              Only {results.length} of {total} requested — the rest of this job's applicant pool has
+              already moved past the initial application stage (interview, assessment, rejected, etc.)
+              or there simply aren't enough remaining eligible candidates. This isn't an error.
+            </p>
+          )}
           <div className="results-table-wrap">
             <table className="results-table">
               <thead>
