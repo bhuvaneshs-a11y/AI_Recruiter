@@ -421,6 +421,13 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
 
     results = _run_concurrent_until_target(applications, process_one, target_count, on_result)
     results.sort(key=_rank_key, reverse=True)
+    # _run_concurrent_until_target submits in fixed-size chunks (see its
+    # docstring) - it can overshoot target_count by up to a full chunk's
+    # worth (confirmed live: target_count=5 with chunk size 4 produced 8, not
+    # a "slight" overshoot). Trim to exactly what was asked for now that
+    # everything's sorted best-first, so a bad chunk-boundary roll doesn't
+    # silently hand back more candidates than requested.
+    results = results[:target_count]
 
     if using_existing_snapshot and stale_application_ids:
         stale_ids = set(stale_application_ids)
