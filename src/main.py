@@ -177,18 +177,22 @@ def _run_concurrent_until_target(items, process_one, target_count, on_result=Non
     into `items` only as needed (a job's applicant pool can be thousands of
     entries; most won't match a specific eligibility criterion).
 
-    Submits work in chunks (config.MAX_CONCURRENT_CANDIDATES at a time)
+    Submits work in chunks (up to config.MAX_CONCURRENT_CANDIDATES at a time)
     rather than all of `items` at once, stopping once enough successes have
     come in - unlike _run_concurrent(), which always processes its full
-    input list. A chunk already in flight when the target is reached is
-    still allowed to finish (not cancelled), so this can slightly overshoot
-    target_count; that's a deliberate simplification, not a bug.
+    input list. Each chunk's size is capped at exactly how many results are
+    still needed (not always the full concurrency limit), so e.g. needing
+    just 1 more submits 1, not a full batch of config.MAX_CONCURRENT_CANDIDATES -
+    this makes overshoot beyond target_count impossible within a single call
+    (confirmed live: previously asking for 5 with a concurrency of 4 could
+    produce 8, since a full chunk of 4 was submitted even when only 1 more
+    was needed).
     """
     results = []
-    chunk_size = max(1, config.MAX_CONCURRENT_CANDIDATES)
     idx = 0
     with ThreadPoolExecutor(max_workers=config.MAX_CONCURRENT_CANDIDATES) as executor:
         while idx < len(items) and len(results) < target_count:
+            chunk_size = max(1, min(config.MAX_CONCURRENT_CANDIDATES, target_count - len(results)))
             chunk = items[idx: idx + chunk_size]
             idx += chunk_size
             futures = [executor.submit(process_one, item) for item in chunk]
