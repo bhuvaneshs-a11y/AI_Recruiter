@@ -9,6 +9,7 @@ from db.writer import (
     clear_job_applicant_snapshot,
     get_job_applicant_snapshot,
     get_job_opening_override,
+    get_latest_completed_analysis,
     save_analysis,
     save_failed_analysis,
     save_job_applicant_snapshot,
@@ -364,6 +365,8 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
         if not record_id:
             return None
 
+        full_name = app.get("Full_Name")
+
         if using_existing_snapshot:
             app_id = app.get("id")
             current_status = client.get_application_status(app_id) if app_id else None
@@ -372,7 +375,16 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
                     stale_application_ids.append(app_id)
                 return None
 
-        full_name = app.get("Full_Name")
+            if not search_prompt:
+                # Reuse an already-analyzed result instead of re-running the
+                # whole pipeline - only safe without an active search prompt
+                # (see get_latest_completed_analysis docstring for why).
+                cached_report = get_latest_completed_analysis(record_id, job_opening_id)
+                if cached_report is not None:
+                    print(f"[{record_id}] reusing cached analysis "
+                          f"(credibility={cached_report.get('overall_credibility_score')})")
+                    return {"zoho_id": record_id, "full_name": full_name, "report": cached_report}
+
         email = app.get("Email")
         phone = app.get("Mobile") or app.get("Phone")
 

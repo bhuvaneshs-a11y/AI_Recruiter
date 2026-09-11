@@ -212,6 +212,46 @@ def save_job_opening_override(zoho_id, title, custom_description, custom_prompt)
         db.close()
 
 
+def get_latest_completed_analysis(candidate_zoho_id, job_opening_zoho_id):
+    """Returns the most recent successfully-completed report dict for a
+    (candidate, job) pair, or None if no completed analysis exists.
+
+    Lets main.run_zoho_for_job() reuse an already-analyzed candidate's result
+    instead of re-running the full pipeline (fresh resume download + LLM
+    extraction + link verification + LLM report) - without this, repeating a
+    job search with a slightly higher limit would burn a fresh round of API
+    calls re-analyzing candidates already covered by the smaller search,
+    just to add the few new ones on top. Only used on the non-search-prompt
+    path (see run_zoho_for_job) - a cached report was generated against
+    whatever search prompt was active *at the time*, which may not match the
+    job's *current* prompt, so reusing it under active filtering could
+    surface a candidate who was never actually checked against today's
+    criteria.
+    """
+    db = SessionLocal()
+    try:
+        candidate = db.query(Candidate).filter_by(zoho_id=candidate_zoho_id).first()
+        job = db.query(JobOpening).filter_by(zoho_id=job_opening_zoho_id).first()
+        if not candidate or not job:
+            return None
+        application = db.query(Application).filter_by(
+            candidate_id=candidate.id, job_opening_id=job.id
+        ).first()
+        if not application:
+            return None
+        analysis = (
+            db.query(ResumeAnalysis)
+            .filter_by(application_id=application.id, status="completed")
+            .order_by(ResumeAnalysis.id.desc())
+            .first()
+        )
+        if not analysis or not analysis.raw_llm_response:
+            return None
+        return json.loads(analysis.raw_llm_response).get("report")
+    finally:
+        db.close()
+
+
 def get_job_applicant_snapshot(zoho_id):
     """Returns the frozen applicant list for a job opening (see
     main.run_zoho_for_job's snapshot mode), or None if no snapshot has been
