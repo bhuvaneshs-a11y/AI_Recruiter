@@ -39,6 +39,15 @@ class JobOpening(Base):
     custom_description = Column(Text)
     custom_prompt = Column(Text)
 
+    # Frozen snapshot of this job's applicant list (see main.run_zoho_for_job) -
+    # a JSON-encoded list of Zoho Application records, filtered/sorted exactly
+    # as get_applications_for_job() returns them. Once saved, "Run Analysis"
+    # for this job reuses this instead of re-querying Zoho live, so repeated
+    # searches return the same candidates (not shifted by new applications
+    # arriving) and skip the slow paginated Zoho fetch on 2nd+ runs.
+    snapshot_applications = Column(Text)
+    snapshot_created_at = Column(DateTime)
+
     applications = relationship("Application", back_populates="job_opening")
 
 

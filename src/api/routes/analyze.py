@@ -13,6 +13,7 @@ router = APIRouter()
 class AnalyzeRequest(BaseModel):
     limit: int = 5
     job_opening_id: Optional[str] = None
+    refresh_snapshot: bool = False
 
 
 @router.post("/analyze")
@@ -31,6 +32,12 @@ def trigger_analysis(body: AnalyzeRequest):
     candidates in Zoho's default order (no job context, ranked by
     credibility only).
 
+    The applicant list for a job is a frozen snapshot after the first search
+    (see main.run_zoho_for_job) - repeated searches return the same
+    candidates instead of shifting as new applications arrive, and are much
+    faster since they skip re-querying Zoho. Pass refresh_snapshot=true to
+    explicitly discard the old snapshot and pull a fresh one from Zoho.
+
     Note: a bad job_opening_id no longer raises synchronously here - that
     lookup now happens inside the background job, so it surfaces as
     status="error" on the first poll instead of an immediate 404.
@@ -44,6 +51,7 @@ def trigger_analysis(body: AnalyzeRequest):
             final_results = run_zoho_for_job(
                 body.job_opening_id, limit=body.limit, client=client,
                 on_result=on_result, on_total=on_total,
+                refresh_snapshot=body.refresh_snapshot,
             )
         else:
             final_results = run_zoho(limit=body.limit, client=client, on_result=on_result, on_total=on_total)

@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from sqlalchemy.exc import IntegrityError
 
@@ -207,6 +208,78 @@ def save_job_opening_override(zoho_id, title, custom_description, custom_prompt)
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
+
+
+def get_job_applicant_snapshot(zoho_id):
+    """Returns the frozen applicant list for a job opening (see
+    main.run_zoho_for_job's snapshot mode), or None if no snapshot has been
+    taken yet - a list of Zoho Application dicts, already filtered/sorted
+    exactly as zoho_client.get_applications_for_job() returns them at the
+    moment the snapshot was taken."""
+    db = SessionLocal()
+    try:
+        row = db.query(JobOpening).filter_by(zoho_id=zoho_id).first()
+        if not row or not row.snapshot_applications:
+            return None
+        return json.loads(row.snapshot_applications)
+    finally:
+        db.close()
+
+
+def save_job_applicant_snapshot(zoho_id, title, applications):
+    """Freezes a job's applicant list (a plain live fetch's result) so
+    subsequent searches for this job reuse it instead of re-querying Zoho -
+    same searches then return the same candidates regardless of new
+    applications arriving in the meantime, and skip the slow paginated Zoho
+    fetch on the 2nd+ run. Upserts by zoho_id for the same reason as
+    save_job_opening_override - the row may not exist yet."""
+    db = SessionLocal()
+    try:
+        payload = json.dumps(applications, ensure_ascii=False)
+        now = datetime.utcnow()
+        row = db.query(JobOpening).filter_by(zoho_id=zoho_id).first()
+        if row:
+            row.snapshot_applications = payload
+            row.snapshot_created_at = now
+            db.commit()
+            return
+
+        try:
+            with db.begin_nested():
+                row = JobOpening(
+                    zoho_id=zoho_id,
+                    title=title,
+                    snapshot_applications=payload,
+                    snapshot_created_at=now,
+                )
+                db.add(row)
+                db.flush()
+        except IntegrityError:
+            # Same race as _get_or_create_job_opening() - another session
+            # created this job's row between our SELECT and INSERT.
+            row = db.query(JobOpening).filter_by(zoho_id=zoho_id).first()
+            row.snapshot_applications = payload
+            row.snapshot_created_at = now
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def clear_job_applicant_snapshot(zoho_id):
+    """Un-freezes a job's applicant list - the next search re-queries Zoho
+    live and takes a fresh snapshot."""
+    db = SessionLocal()
+    try:
+        row = db.query(JobOpening).filter_by(zoho_id=zoho_id).first()
+        if row:
+            row.snapshot_applications = None
+            row.snapshot_created_at = None
+            db.commit()
     finally:
         db.close()
 

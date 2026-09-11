@@ -162,6 +162,23 @@ class ZohoClient:
             and a.get("Application_Status") not in EXCLUDED_APPLICATION_STATUSES
         ]
 
+    def get_application_status(self, application_id):
+        """Cheap single-record status check for one Application - lets
+        main.run_zoho_for_job() re-validate a frozen snapshot entry (see
+        db.writer.save_job_applicant_snapshot) without redoing the full,
+        slow paginated Applications search just to see if one candidate's
+        status changed. Confirmed live: ~1.6s per call vs 40+s for a full
+        search of a few thousand applications."""
+        resp = requests.get(
+            f"{config.ZOHO_API_DOMAIN}/recruit/v2/Applications/{application_id}",
+            headers=self._headers(),
+            params={"fields": "Application_Status"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json().get("data", [])
+        return data[0].get("Application_Status") if data else None
+
     def get_job_opening(self, job_opening_id, fields=None):
         resp = requests.get(
             f"{config.ZOHO_API_DOMAIN}/recruit/v2/JobOpenings/{job_opening_id}",

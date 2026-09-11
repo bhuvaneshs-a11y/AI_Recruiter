@@ -1,10 +1,18 @@
 import argparse
 import json
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import config
-from db.writer import get_job_opening_override, save_analysis, save_failed_analysis
+from db.writer import (
+    clear_job_applicant_snapshot,
+    get_job_applicant_snapshot,
+    get_job_opening_override,
+    save_analysis,
+    save_failed_analysis,
+    save_job_applicant_snapshot,
+)
 from deep_analysis import (
     check_candidate_match,
     check_candidate_match_gemini,
@@ -270,28 +278,55 @@ def _rank_key(result):
     return fit if fit is not None else report.get("overall_credibility_score", 0)
 
 
-def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on_total=None):
+def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on_total=None,
+                      refresh_snapshot=False):
     """Analyze candidates who applied to a specific Job Opening, returned best-first.
 
     A job opening can have thousands of applicants (seen live: 6,424 for one
     role) - `limit` caps how many are actually processed by the pipeline, not
-    how many total applicants exist. The most recent applications are
-    processed first (Zoho's default Applications ordering).
+    how many total applicants exist.
+
+    The applicant list is a frozen snapshot, not a live Zoho query every time:
+    the FIRST search for a given job fetches live from Zoho and saves the
+    result (see db.writer.save_job_applicant_snapshot); every search after
+    that reuses the saved snapshot instead of re-querying Zoho. This means
+    "the same job search" returns the same candidates in the same order every
+    time, even as new applications arrive in Zoho in the meantime - it only
+    changes when refresh_snapshot=True explicitly asks for a fresh pull (which
+    clears the old snapshot and takes a new one). This also makes 2nd+
+    searches for a popular job much faster, since the slow paginated Zoho
+    fetch (confirmed live: 30+ seconds for ~3,000 applications) only happens
+    once per job instead of on every search.
+
+    Every time an EXISTING snapshot is reused, each candidate about to be
+    processed gets a cheap live status re-check (ZohoClient.get_application_
+    status(), ~1.6s vs 40+s for a full re-search) before any real work is done
+    on them. Only "Applied" is treated as still fresh/undecided - any other
+    status (Rejected, Junk candidate, Call, In Review, Qualified, Technical
+    Round - 1, Interview-Scheduled, ...) means a recruiter has already acted
+    on this candidate elsewhere, so they're evicted from the snapshot and
+    skipped in favor of the next still-"Applied" candidate further down the
+    list - keeping the requested count filled with genuinely fresh candidates
+    instead of ones already being handled elsewhere. Evicted candidates are
+    removed from the persisted snapshot afterward so future searches don't
+    pay for re-checking them again. This re-check is skipped on the very
+    first search (fresh live data has nothing to re-validate against yet).
 
     If the job has a saved search prompt (see save_job_opening_override), this
-    switches into filtering mode: candidates are pre-checked against that
-    prompt's criteria (e.g. "must have graduated in 2025") using only their
-    extracted profile, BEFORE running the full (expensive) analysis. Non-
-    matching candidates are skipped entirely - not shown as failures, not
-    counted toward `limit` - and the search keeps going further into the
-    applicant pool until `limit` genuine matches are found or the pool is
-    exhausted. Without a search prompt, behavior is unchanged: the first
-    `limit` applications (in order) are all analyzed and shown, matching or not.
+    additionally switches into filtering mode: candidates are pre-checked
+    against that prompt's criteria (e.g. "must have graduated in 2025") using
+    only their extracted profile, BEFORE running the full (expensive)
+    analysis. Non-matching candidates are skipped entirely - not shown as
+    failures, not counted toward `limit` - and the search keeps going further
+    into the applicant pool until `limit` genuine matches are found or the
+    pool is exhausted. Without a search prompt, the search still keeps going
+    past any status-stale candidates (see above), but every candidate it
+    actually reaches gets fully analyzed and shown, matching or not.
 
-    on_result / on_total: see run_zoho() - same live-progress callbacks. In
-    filtering mode, on_total reports the target (how many matches we're
-    trying to find), not how many applications will be attempted (unknown
-    upfront - could be the entire pool).
+    on_result / on_total: see run_zoho() - same live-progress callbacks.
+    on_total reports the target (how many results we're trying to fill), not
+    how many applications will be attempted (unknown upfront - could be the
+    entire pool).
     """
     client = client or ZohoClient()
 
@@ -300,64 +335,38 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
     if not job_opening:
         raise ValueError(f"Job opening {job_opening_id} not found")
 
-    applications = client.get_applications_for_job(job_opening_id, job_opening.get("Posting_Title"))
+    if refresh_snapshot:
+        clear_job_applicant_snapshot(job_opening_id)
+
+    applications = None if refresh_snapshot else get_job_applicant_snapshot(job_opening_id)
+    using_existing_snapshot = applications is not None
+    if applications is None:
+        applications = client.get_applications_for_job(job_opening_id, job_opening.get("Posting_Title"))
+        save_job_applicant_snapshot(job_opening_id, job_opening.get("Posting_Title"), applications)
 
     override = get_job_opening_override(job_opening_id)
     search_prompt = override.get("custom_prompt") if override else None
 
-    if not search_prompt:
-        if limit is not None:
-            applications = applications[:limit]
-        if on_total:
-            on_total(len(applications))
-
-        def process_one(app):
-            record_id = app.get("$Candidate_Id")
-            if not record_id:
-                return None
-
-            full_name = app.get("Full_Name")
-            email = app.get("Email")
-            phone = app.get("Mobile") or app.get("Phone")
-
-            attachments = client.list_attachments(record_id).get("data", [])
-            resume_attachment = _find_resume_attachment(attachments)
-            if not resume_attachment:
-                return {"zoho_id": record_id, "full_name": full_name, "report": None,
-                         "failure_reason": "no_resume_attachment"}
-
-            file_name = resume_attachment["File_Name"]
-            save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
-            client.download_attachment(record_id, resume_attachment["id"], save_path)
-            report = process_resume(
-                save_path, record_id,
-                full_name=full_name, email=email, phone=phone,
-                job_opening=job_opening,
-            )
-            result = {"zoho_id": record_id, "full_name": full_name, "report": report}
-            if report is None:
-                # process_resume() already logged/saved the real error - this is a
-                # genuinely different failure than "no resume attachment" above
-                # (e.g. a corrupted file, or an LLM/rate-limit error), and the UI
-                # must not conflate the two.
-                result["failure_reason"] = "processing_error"
-            return result
-
-        results = _run_concurrent(applications, process_one, on_result)
-        results.sort(key=_rank_key, reverse=True)
-        return results
-
-    # Filtering mode - a search prompt was saved for this job.
     target_count = limit if limit is not None else len(applications)
     if on_total:
         on_total(target_count)
 
     backend = _select_backend()
+    stale_application_ids = []
+    stale_lock = threading.Lock()
 
     def process_one(app):
         record_id = app.get("$Candidate_Id")
         if not record_id:
             return None
+
+        if using_existing_snapshot:
+            app_id = app.get("id")
+            current_status = client.get_application_status(app_id) if app_id else None
+            if current_status is not None and current_status != "Applied":
+                with stale_lock:
+                    stale_application_ids.append(app_id)
+                return None
 
         full_name = app.get("Full_Name")
         email = app.get("Email")
@@ -366,25 +375,29 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
         attachments = client.list_attachments(record_id).get("data", [])
         resume_attachment = _find_resume_attachment(attachments)
         if not resume_attachment:
-            # Can't even check this candidate against the criteria - skip and
-            # keep searching, same as a non-match (see module docstring above).
-            return None
+            if search_prompt:
+                # Can't even check this candidate against the criteria - skip
+                # and keep searching, same as a non-match (see docstring).
+                return None
+            return {"zoho_id": record_id, "full_name": full_name, "report": None,
+                     "failure_reason": "no_resume_attachment"}
 
         file_name = resume_attachment["File_Name"]
         save_path = config.RESUMES_DIR / f"{record_id}_{file_name}"
         client.download_attachment(record_id, resume_attachment["id"], save_path)
 
-        try:
-            text = extract_text(save_path)
-            extra_links = extract_links(save_path)
-            profile = EXTRACT_BY_BACKEND[backend](text, extra_links)
-        except Exception as e:
-            print(f"[{record_id}] profile extraction FAILED during search-prompt pre-check: {e}")
-            return None
-
-        match_result = MATCH_CHECK_BY_BACKEND[backend](profile, search_prompt)
-        if not match_result.get("matches"):
-            return None
+        profile = None
+        if search_prompt:
+            try:
+                text = extract_text(save_path)
+                extra_links = extract_links(save_path)
+                profile = EXTRACT_BY_BACKEND[backend](text, extra_links)
+            except Exception as e:
+                print(f"[{record_id}] profile extraction FAILED during search-prompt pre-check: {e}")
+                return None
+            match_result = MATCH_CHECK_BY_BACKEND[backend](profile, search_prompt)
+            if not match_result.get("matches"):
+                return None
 
         report = process_resume(
             save_path, record_id,
@@ -392,14 +405,28 @@ def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on
             job_opening=job_opening, profile=profile,
         )
         if report is None:
-            # Matched the search prompt but the full analysis itself failed -
-            # don't count this as one of our `limit` results; keep searching
-            # for a genuine replacement instead of surfacing a partial failure.
-            return None
+            if search_prompt:
+                # Matched the search prompt but the full analysis itself
+                # failed - don't count this as one of our `limit` results;
+                # keep searching for a genuine replacement instead of
+                # surfacing a partial failure.
+                return None
+            # process_resume() already logged/saved the real error - this is a
+            # genuinely different failure than "no resume attachment" above
+            # (e.g. a corrupted file, or an LLM/rate-limit error), and the UI
+            # must not conflate the two.
+            return {"zoho_id": record_id, "full_name": full_name, "report": None,
+                     "failure_reason": "processing_error"}
         return {"zoho_id": record_id, "full_name": full_name, "report": report}
 
     results = _run_concurrent_until_target(applications, process_one, target_count, on_result)
     results.sort(key=_rank_key, reverse=True)
+
+    if using_existing_snapshot and stale_application_ids:
+        stale_ids = set(stale_application_ids)
+        remaining = [a for a in applications if a.get("id") not in stale_ids]
+        save_job_applicant_snapshot(job_opening_id, job_opening.get("Posting_Title"), remaining)
+
     return results
 
 

@@ -10,6 +10,8 @@ ADDED_COLUMNS = {
     "job_openings": [
         ("custom_description", "TEXT"),
         ("custom_prompt", "TEXT"),
+        ("snapshot_applications", "TEXT"),
+        ("snapshot_created_at", "TIMESTAMP"),
     ],
 }
 
