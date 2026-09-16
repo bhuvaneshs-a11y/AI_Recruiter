@@ -275,12 +275,21 @@ def run_zoho(limit=None, client=None, on_result=None, on_total=None):
 
 def _rank_key(result):
     """Best-first: prefer job-fit score when available (job-scoped analysis),
-    fall back to credibility. Failed analyses always sort last."""
+    fall back to credibility. When fit scores tie, credibility breaks the
+    tie - without this, two candidates tied on fit sorted by whichever one's
+    analysis happened to finish processing first (Python's sort is stable,
+    so equal keys keep their pre-sort order), not by any real quality signal.
+    Confirmed live: two candidates both scored fit=55 but credibility 50 vs
+    95 - the 50 was ranking "Best Match" over the 95 purely by completion
+    order. Failed analyses always sort last."""
     report = result.get("report")
     if not report:
-        return -1
+        return (-1, -1)
     fit = report.get("overall_fit_score")
-    return fit if fit is not None else report.get("overall_credibility_score", 0)
+    credibility = report.get("overall_credibility_score", 0)
+    if fit is not None:
+        return (fit, credibility)
+    return (credibility, credibility)
 
 
 def run_zoho_for_job(job_opening_id, limit=None, client=None, on_result=None, on_total=None,
