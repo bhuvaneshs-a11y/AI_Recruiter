@@ -9,12 +9,22 @@ All commands are run from `src/` (the entry scripts rely on flat sibling imports
 ```bash
 cd src
 pip install -r ../requirements.txt      # install deps
-python migrate_db.py                    # create/update the SQLite schema (idempotent, safe to re-run)
+python migrate_db.py                    # create/update the schema - SQLite locally, or whatever DATABASE_URL points at (idempotent, safe to re-run)
 python main.py --local <path-to-resume> # run the full pipeline on one local file (no Zoho, no side effects beyond local files/DB)
 python main.py --zoho --limit N         # pull N candidates from Zoho Recruit and run the full pipeline on each
+
+uvicorn api.app:app --port 8000         # backend, localhost:8000 (also run from src/)
+```
+
+```bash
+cd frontend
+npm install
+npm run dev                             # frontend dev server, localhost:5173
 ```
 
 There is no test suite, linter, or build step in this project. Verification is done by running the actual pipeline against real downloaded resumes and real external APIs (Zoho, GitHub, Gemini) — see the "Testing philosophy" note below before assuming something works from reading the code alone.
+
+**Work on the `dev` branch, not `master`.** `master` auto-deploys to production (Render + Vercel) on every push — see "Deployment and git workflow" below before pushing anything there.
 
 ## Architecture
 
@@ -79,6 +89,7 @@ Gemini model IDs have proven **volatile in practice**: two model names 404'd out
 - **`/JobOpenings/{id}/associate` does not work in the job→candidates direction**, despite docs implying symmetry with the candidate-side endpoint — confirmed live to return 400 ("the relation name given seems to be invalid", then "EXTRA_PARAM_FOUND" after trying the docs-suggested `candidate_statuses` param). `get_applications_for_job()` instead searches the `Applications` module directly, filtering server-side by `Job_Opening_Name` (a candidate's applied-to job title) — **not** by `$Job_Opening_Id`, a computed reference field that Zoho's search API silently ignores as a criterion (returns 200 with unfiltered results across all jobs, not an error). Since two job openings could share a title, results are then double-checked against the exact `job_opening_id` client-side on the smaller returned set. Total Applications volume seen live: 16,543 records — fetch-all-then-filter is not viable, hence the server-side title search.
 - **`get_applications_for_job()` excludes `Application_Status` in `EXCLUDED_APPLICATION_STATUSES`** (`"Rejected"`, `"Junk candidate"`) client-side — neither a previously-rejected candidate nor a junk/spam/irrelevant application should be re-surfaced and re-analyzed every time a job's applicants are pulled. Confirmed live on one job's 4,899 applications: 258 `"Rejected"` + 323 `"Junk candidate"` correctly excluded, 4,318 remained (`"Applied"`, `"In Review"`, `"Call"`, `"Qualified"`, `"Technical Round - 1"`, `"Interview-Scheduled"`).
 - **`get_applications_for_job()` explicitly sorts `sort_by=Created_Time&sort_order=desc`.** Without it, the Applications search endpoint's default order is *not* based on `Created_Time`, `Updated_On`, or `Last_Activity_Time` — confirmed live by pulling those three fields for the first 10 results and finding `Created_Time` completely out of sequence. Back-to-back calls happened to return the same order, but with no documented ordering guarantee that isn't safe to rely on going forward (new applications arriving, or Zoho's search index just reshuffling, could silently change who ends up in a limited pull's first N). Sorting by `Created_Time` (set once at creation, never changes) makes "the first N applicants for this job" stable across repeated searches, changing only when the actual eligible population changes (new application, or an existing one's status moves into `EXCLUDED_APPLICATION_STATUSES`).
+
 #### Resolved: "You have made too many requests continuously" (token-refresh rate limit)
 
 - **Error**: Zoho's OAuth token endpoint (`/oauth/v2/token`) returns `"You have made too many requests continuously"` instead of a new access token.
@@ -172,6 +183,14 @@ Three thread-safety fixes were needed to make this safe:
 - `ZohoClient._headers()`'s check-and-refresh-token logic is now guarded by a `threading.Lock` — without it, multiple concurrent candidate threads could all see an expired token at the same instant and every one of them would call the refresh endpoint simultaneously, retriggering the exact rate-limit error `get_shared_client()` was introduced to fix, just from a new angle.
 - `db/session.py`'s SQLite engine now sets `connect_args={"timeout": 30}` (a busy-timeout) — SQLite serializes writes at the file level, so two threads finishing at nearly the same moment could otherwise hit "database is locked" instead of one simply waiting briefly for the other.
 - `db.writer._get_or_create_job_opening()` wraps its insert in a SAVEPOINT (`db.begin_nested()`) and retries the lookup on `IntegrityError` — **error**: `psycopg2.errors.UniqueViolation: duplicate key value violates unique constraint "job_openings_zoho_id_key"`, hit live on the deployed Postgres backend. **Root cause**: multiple candidates applying to the same never-before-analyzed job now finish around the same moment, each in its own `save_analysis()` session; two sessions can both see "no row for this zoho_id yet" and both try to insert it, and the second violates the unique constraint. SQLite's single-writer-per-file lock had been masking this locally (writes serialize, so the second session's SELECT always saw the first session's committed row) - Postgres has no such global lock, so it happens for real. **Fix attempt #1** (giving the upsert its own separate session/connection so a losing thread could roll back and retry without touching the caller's session) **self-deadlocks on SQLite** - the caller's still-open transaction already holds the file's only write lock, so the second connection's write blocks until the busy-timeout, then fails, and the caller can never finish either. **Actual fix**: stay on the caller's own session, but wrap just the insert in a SAVEPOINT so a failed attempt rolls back only that insert (not the candidate row already flushed earlier in the same transaction); on `IntegrityError`, re-query - the row is now guaranteed committed by whichever session won. Verified live: 6 concurrent candidates applying to the same brand-new job produce exactly 1 `JobOpening` row, no errors.
+
+### Deployment and git workflow
+
+Deployed on **Render** (backend, Web Service, Root Directory `src`) + **Vercel** (frontend, Static Site, Root Directory `frontend`) + **Neon** (Postgres, via `DATABASE_URL`) — see `README.md`'s Deployment section for host-by-host setup details and `TECH_STACK.md` for the reasoning behind each choice. Local development needs none of this (SQLite + `localhost` by default).
+
+**`master` is production** — Render and Vercel both auto-deploy on every push to it. **All work happens on `dev`** instead; merge `dev` → `master` and push only once something's been verified working, so a deploy is a deliberate action rather than a side effect of every commit. This was introduced after a live analysis job got killed mid-run by an auto-redeploy triggered by an unrelated push — see the `analysis_jobs.py` in-memory-job-store note above for why that particular failure mode (job vanishes, next poll 404s) is expected given the store's design, not a bug to fix there.
+
+Render's `CORS_ORIGINS` and Vercel's `VITE_API_BASE` must reference each other's *current* URLs exactly (no trailing slash) — a mismatch here is the most common cause of a `Failed to fetch` error that only some users see (the frontend bundle itself is fine, e.g. because `VITE_API_BASE` was correctly baked in at build time, but the *backend's* CORS policy silently rejects the origin). `VITE_API_BASE` is baked in by Vite at **build** time, not read at runtime — changing it needs a new Vercel build, a redeploy alone won't pick it up.
 
 ### Testing philosophy
 
